@@ -1,0 +1,24 @@
+model User {
+  id            String       @id @default(cuid())
+  discordId     String       @unique
+  username      String
+  walletAddress String?      @unique
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  characters    Character[]
+  adventures    Adventure[]
+  // Friendship relations
+  friends       Friendship[] @relation("UserFriends")
+  friendOf      Friendship[] @relation("FriendOf")
+}
+
+model Friendship {
+  id        String   @id @default(cuid())
+  status    String   @default("PENDING") // PENDING, ACCEPTED
+  user      User     @relation("UserFriends", fields: [userId], references: [id])
+  userId    String
+  friend    User     @relation("FriendOf", fields: [friendId], references: [id])
+  friendId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+} 

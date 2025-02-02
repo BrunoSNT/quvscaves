@@ -1,0 +1,37 @@
+{
+  "name": "rpg-discord-bot",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "clean": "rm -rf dist node_modules",
+    "clean:dist": "rm -rf dist",
+    "clean:prisma": "rm -rf node_modules/.prisma",
+    "prebuild": "npm run clean:dist",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "dev:debug": "tsx --inspect src/index.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "prisma:studio": "prisma studio",
+    "test:db": "tsx src/db-test.ts",
+    "setup": "npm run clean && pnpm install && npm run prisma:generate && npm run build",
+    "restart": "npm run clean:dist && npm run build && npm run start"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.18.0",
+    "@prisma/client": "^5.10.2",
+    "@solana/web3.js": "^1.91.1",
+    "axios": "^1.7.9",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/qrcode": "^1.5.5",
+    "prisma": "^5.10.2",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}

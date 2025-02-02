@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+        
+
+model User {
+  id            String    @id
+  discordId     String    @unique
+  username      String
+  walletAddress String?   @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  adventures    Adventure[]
+  characters    Character[]
+  friends       Friendship[] @relation("UserFriends")
+  friendOf      Friendship[] @relation("FriendOf")
+}
+
+model Adventure {
+  id             String   @id @default(uuid())
+  name           String
+  status         String   // ACTIVE, PAUSED, FINISHED
+  userId         String
+  textChannelId  String?
+  voiceChannelId String?
+  categoryId     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id])
+  players        AdventurePlayer[]
+  scenes         Scene[]
+  inventory      InventoryItem[]
+}
+
+model AdventurePlayer {
+  id          String    @id @default(uuid())
+  adventureId String
+  characterId String
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+  character   Character @relation(fields: [characterId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  @@unique([adventureId, characterId])
+}
+
+model Character {
+  id          String    @id @default(uuid())
+  name        String
+  class       String
+  level       Int       @default(1)
+  health      Int       @default(100)
+  mana        Int       @default(100)
+  experience  Int       @default(0)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  adventures  AdventurePlayer[]
+  inventory   InventoryItem[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Scene {
+  id          String    @id @default(uuid())
+  name        String
+  description String
+  adventureId String
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model InventoryItem {
+  id          String    @id @default(uuid())
+  name        String
+  type        String    // WEAPON, ARMOR, POTION, etc.
+  description String
+  adventureId String
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+  characterId String?
+  character   Character? @relation(fields: [characterId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Friendship {
+  id        String   @id @default(uuid())
+  userId    String
+  friendId  String
+  status    String   // PENDING, ACCEPTED, REJECTED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation("UserFriends", fields: [userId], references: [id])
+  friend    User     @relation("FriendOf", fields: [friendId], references: [id])
+  @@unique([userId, friendId])
+} 
