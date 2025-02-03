@@ -1,6 +1,9 @@
 import { ChatInputCommandInteraction, ChannelType, CategoryChannel } from 'discord.js';
 import { prisma } from '../lib/prisma';
 import { generateResponse } from '../ai/gamemaster';
+import { getMessages, SupportedLanguage } from '../utils/language';
+import { GameContext } from '../types/game';
+import { speakInVoiceChannel, disconnectVoice } from '../lib/voice';
 
 export async function handleStartAdventure(interaction: ChatInputCommandInteraction) {
     try {
@@ -66,20 +69,21 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
         const referenceCategory = interaction.guild?.channels.cache.get('1335320205055885354') as CategoryChannel;
         
         const adventureCategory = await interaction.guild?.channels.create({
-            name: `🎲 ${adventure.name}`,
+            name: getMessages(adventure.language as SupportedLanguage).channels.categoryName(adventure.name),
             type: ChannelType.GuildCategory,
             position: referenceCategory.position + 1
         });
 
         // Create standard channels
+        const msgs = getMessages(adventure.language as SupportedLanguage);
         const textChannel = await interaction.guild?.channels.create({
-            name: `adventure-log`,
+            name: msgs.channels.adventureLog,
             type: ChannelType.GuildText,
             parent: adventureCategory?.id
         });
 
         const diceChannel = await interaction.guild?.channels.create({
-            name: `dice`,
+            name: msgs.channels.dice,
             type: ChannelType.GuildText,
             parent: adventureCategory?.id
         });
@@ -107,34 +111,27 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             });
         }
 
-        const voiceChannel = await interaction.guild?.channels.create({
-            name: `Table`,
-            type: ChannelType.GuildVoice,
-            parent: adventureCategory?.id
-        });
-
-        // Update adventure with channel IDs
+        // Update adventure without voice channel ID
         await prisma.adventure.update({
             where: { id: adventure.id },
             data: {
                 textChannelId: textChannel?.id,
-                voiceChannelId: voiceChannel?.id,
                 categoryId: adventureCategory?.id
             }
         });
 
-        // Create initial scene
+        // Create initial scene with localized content
         const initialScene = await prisma.scene.create({
             data: {
-                name: 'Beginning',
-                description: 'You stand at the threshold of your adventure...',
+                name: msgs.defaultScenes.beginning.name,
+                description: msgs.defaultScenes.beginning.description,
                 adventureId: adventure.id
             }
         });
 
         try {
             // Generate initial narrative using AI
-            const context = {
+            const context: GameContext = {
                 scene: initialScene.description,
                 playerActions: [],
                 characters: characters,
@@ -143,22 +140,23 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     mana: 100,
                     inventory: [],
                     questProgress: 'STARTING'
-                }
+                },
+                language: adventure.language as 'en-US' | 'pt-BR'
             };
 
             const response = await generateResponse(context);
             await textChannel?.send({
-                content: `Welcome, ${interaction.user.username}!\n\n${response}`
+                content: getMessages(adventure.language as SupportedLanguage).welcome.initialMessage(interaction.user.username) + '\n\n' + response
             });
         } catch (aiError) {
             console.error('AI Error:', aiError);
             await textChannel?.send({
-                content: `Welcome, ${interaction.user.username}!\n\n[Narration] You stand at the beginning of your journey, ready for adventure.\n[Dialogue] "Welcome, brave adventurer! What would you like to do?"\n[Choices] - Explore the area\n- Talk to nearby NPCs\n- Check your equipment`
+                content: getMessages(adventure.language as SupportedLanguage).defaultScenes.beginning.description
             });
         }
 
         await interaction.editReply({
-            content: `✨ Adventure started! Your adventure channels have been created!`
+            content: getMessages(adventure.language as SupportedLanguage).success.adventureStarted
         });
 
     } catch (error) {
@@ -186,7 +184,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
 
         if (!user) {
             await interaction.editReply({
-                content: 'Please register first using `/register`'
+                content: getMessages(adventure.language as SupportedLanguage).errors.registerFirst
             });
             return;
         }
@@ -195,7 +193,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
         const character = user.characters.find(c => c.name === characterName);
         if (!character) {
             await interaction.editReply({
-                content: 'Character not found. Please create a character first using `/create_character`'
+                content: getMessages(adventure.language as SupportedLanguage).errors.characterNotFound
             });
             return;
         }
@@ -215,7 +213,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
 
         if (!adventure) {
             await interaction.editReply({
-                content: 'Adventure not found.'
+                content: getMessages(adventure.language as SupportedLanguage).errors.adventureNotFound
             });
             return;
         }
@@ -224,7 +222,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
         const alreadyJoined = adventure.players.some(p => p.character.userId === user.id);
         if (alreadyJoined) {
             await interaction.editReply({
-                content: 'You are already in this adventure.'
+                content: getMessages(adventure.language as SupportedLanguage).errors.alreadyInAdventure
             });
             return;
         }
@@ -241,7 +239,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
 
         if (!friendship) {
             await interaction.editReply({
-                content: 'You can only join adventures created by your friends.'
+                content: getMessages(adventure.language as SupportedLanguage).errors.friendsOnly
             });
             return;
         }
@@ -283,19 +281,285 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
             const textChannel = await interaction.guild?.channels.fetch(adventure.textChannelId);
             if (textChannel?.isTextBased()) {
                 await textChannel.send({
-                    content: `🎉 ${character.name} has joined the adventure!`
+                    content: getMessages(adventure.language as SupportedLanguage).welcome.newPlayer(character.name)
                 });
             }
         }
 
         await interaction.editReply({
-            content: `Successfully joined the adventure "${adventure.name}" with character ${character.name}!`
+            content: getMessages(adventure.language as SupportedLanguage).success.adventureJoined(adventure.name, character.name)
         });
 
     } catch (error) {
         console.error('Error joining adventure:', error);
         await interaction.editReply({
-            content: 'Failed to join adventure. Please try again.'
+            content: getMessages(adventure.language as SupportedLanguage).errors.genericError
         }).catch(console.error);
+    }
+}
+
+export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
+    try {
+        await interaction.deferReply({ ephemeral: false });
+        
+        const action = interaction.options.getString('description', true);
+        
+        // Find user's active adventure
+        const adventure = await prisma.adventure.findFirst({
+            where: {
+                players: {
+                    some: {
+                        character: {
+                            user: {
+                                discordId: interaction.user.id
+                            }
+                        }
+                    }
+                },
+                status: 'ACTIVE'
+            },
+            include: {
+                players: {
+                    include: {
+                        character: {
+                            include: {
+                                user: true
+                            }
+                        }
+                    }
+                },
+                scenes: {
+                    orderBy: {
+                        createdAt: 'desc'
+                    },
+                    take: 1
+                },
+                inventory: true,
+                user: true
+            }
+        });
+
+        if (!adventure) {
+            await interaction.editReply({
+                content: getMessages(adventure.language as SupportedLanguage).errors.needActiveAdventure
+            });
+            return;
+        }
+
+        // Get the player's character in this adventure
+        const playerCharacter = adventure.players.find(p => 
+            p.character.user.discordId === interaction.user.id
+        )?.character;
+
+        if (!playerCharacter) {
+            await interaction.editReply({
+                content: getMessages(adventure.language as SupportedLanguage).errors.characterNotInAdventure
+            });
+            return;
+        }
+
+        const context: GameContext = {
+            scene: adventure.scenes[0]?.description || 'Continuing the adventure...',
+            playerActions: [action],
+            characters: adventure.players.map(p => p.character),
+            currentState: {
+                health: playerCharacter.health,
+                mana: playerCharacter.mana,
+                inventory: adventure.inventory.map(item => item.name),
+                questProgress: adventure.status
+            },
+            language: adventure.language as 'en-US' | 'pt-BR'
+        };
+
+        // Get AI response with error handling
+        let response: string;
+        try {
+            response = await generateResponse(context);
+            if (!response) {
+                throw new Error('Empty response from AI');
+            }
+        } catch (aiError) {
+            console.error('AI Error:', aiError);
+            response = getMessages(adventure.language as SupportedLanguage).defaultScenes.beginning.narration(playerCharacter.name, action);
+        }
+        
+        // Create a new scene with the action and response
+        await prisma.scene.create({
+            data: {
+                name: `${playerCharacter.name}'s Action`,
+                description: `**Action**: ${action}\n\n${response}`,
+                adventureId: adventure.id
+            }
+        });
+
+        // Send response to the adventure's text channel
+        if (adventure.textChannelId && adventure.categoryId) {
+            const textChannel = await interaction.guild?.channels.fetch(adventure.textChannelId);
+            if (textChannel?.isTextBased()) {
+                // First send the action without TTS
+                await textChannel.send({
+                    content: `🎭 **${playerCharacter.name}**: ${action}`,
+                    tts: false,
+                });
+
+                // Extract sections
+                const sections = response.split(/\[(?=[A-Z])/);
+                
+                // Group sections by type
+                const narrativeSections = sections.filter(section => 
+                    section.startsWith('Narration') || 
+                    section.startsWith('Narração') || 
+                    section.startsWith('Dialogue') || 
+                    section.startsWith('Diálogo') || 
+                    section.startsWith('Atmosphere') ||
+                    section.startsWith('Atmosfera')
+                ).map(section => `[${section.trim()}`);
+
+                const mechanicSections = sections.filter(section =>
+                    section.startsWith('Suggested Choices') ||
+                    section.startsWith('Sugestões de Ação') ||
+                    section.startsWith('Effects') ||
+                    section.startsWith('Efeitos')
+                ).map(section => `[${section.trim()}`);
+
+                // Send narrative sections based on voice type
+                for (const section of narrativeSections) {
+                    // Send text message
+                    await textChannel.send({
+                        content: section,
+                        tts: adventure.voiceType === 'discord'
+                    });
+
+                    // Use ElevenLabs if selected
+                    if (adventure.voiceType === 'elevenlabs' && interaction.guild) {
+                        try {
+                            await speakInVoiceChannel(
+                                section.replace(/\[.*?\]/g, '').trim(),
+                                interaction.guild,
+                                adventure.categoryId,
+                                adventure.id
+                            );
+                        } catch (voiceError) {
+                            console.error('Voice playback error:', voiceError);
+                            // Fallback to Discord TTS if ElevenLabs fails
+                            await textChannel.send({
+                                content: section,
+                                tts: true
+                            });
+                        }
+                    }
+                }
+
+                // Send mechanic sections without voice
+                if (mechanicSections.length > 0) {
+                    await textChannel.send({
+                        content: mechanicSections.join('\n\n'),
+                        tts: false
+                    });
+                }
+            }
+        }
+
+        await interaction.editReply({
+            content: '✨ Ação processada!'
+        });
+
+    } catch (error) {
+        console.error('Error processing action:', error);
+        await interaction.editReply({
+            content: 'Failed to process action. Please try again.'
+        });
+    }
+}
+
+export async function handleAdventureSettings(interaction: ChatInputCommandInteraction) {
+    try {
+        await interaction.deferReply({ ephemeral: true });
+        
+        const adventureId = interaction.options.getString('adventure_id', true);
+        const rawLanguage = interaction.options.getString('language');
+        const voiceType = interaction.options.getString('voice');
+
+        // Find the adventure first
+        const adventure = await prisma.adventure.findFirst({
+            where: {
+                id: adventureId,
+                userId: (await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id }
+                }))?.id
+            }
+        });
+
+        if (!adventure) {
+            await interaction.editReply({
+                content: 'Adventure not found or you do not have permission to modify it.'
+            });
+            return;
+        }
+
+        // Prepare update data
+        const updateData: any = {};
+
+        // Handle language update if provided
+        if (rawLanguage) {
+            const newLanguage: SupportedLanguage = 
+                rawLanguage === 'Português (Brasil)' ? 'pt-BR' : 'en-US';
+            updateData.language = newLanguage;
+        }
+
+        // Handle voice type update if provided
+        if (voiceType) {
+            updateData.voiceType = voiceType;
+        }
+
+        // Update adventure settings
+        const updatedAdventure = await prisma.adventure.update({
+            where: { id: adventureId },
+            data: updateData
+        });
+
+        // Get messages in the current language
+        const msgs = getMessages(updatedAdventure.language as SupportedLanguage);
+
+        // Build response message
+        let response = msgs.success.settingsUpdated;
+        if (voiceType) {
+            response += `\n${msgs.success.voiceUpdated(voiceType === 'elevenlabs' ? 'ElevenLabs' : 'Discord TTS')}`;
+        }
+
+        // Send confirmation
+        await interaction.editReply({
+            content: response
+        });
+
+    } catch (error) {
+        console.error('Error updating adventure settings:', error);
+        await interaction.editReply({
+            content: 'Failed to update adventure settings. Please try again.'
+        });
+    }
+}
+
+export async function handleDisconnectVoice(interaction: ChatInputCommandInteraction) {
+    try {
+        if (!interaction.guildId) {
+            await interaction.reply({ 
+                content: 'This command can only be used in a server', 
+                ephemeral: true 
+            });
+            return;
+        }
+
+        disconnectVoice(interaction.guildId);
+        await interaction.reply({ 
+            content: 'Disconnected from voice channel', 
+            ephemeral: true 
+        });
+    } catch (error) {
+        console.error('Error disconnecting from voice:', error);
+        await interaction.reply({ 
+            content: 'Failed to disconnect from voice channel', 
+            ephemeral: true 
+        });
     }
 } 

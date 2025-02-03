@@ -3,99 +3,115 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider = "postgresql"
+  url = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
-        
 
+// Base model for users
 model User {
-  id            String    @id
-  discordId     String    @unique
+  id            String        @id @default(cuid())
+  discordId     String        @unique
   username      String
-  walletAddress String?   @unique
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  walletAddress String?       @unique
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  // Relations
   adventures    Adventure[]
   characters    Character[]
-  friends       Friendship[] @relation("UserFriends")
-  friendOf      Friendship[] @relation("FriendOf")
+  friends       Friendship[]  @relation("UserFriends")
+  friendOf      Friendship[]  @relation("FriendOf")
 }
 
+// Character model
+model Character {
+  id          String            @id @default(cuid())
+  name        String
+  class       String
+  level       Int               @default(1)
+  health      Int               @default(100)
+  mana        Int               @default(100)
+  experience  Int               @default(0)
+  userId      String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  // Relations
+  user        User              @relation(fields: [userId], references: [id])
+  adventures  AdventurePlayer[]
+  inventory   InventoryItem[]
+}
+
+// Adventure model
 model Adventure {
-  id             String   @id @default(uuid())
-  name           String
-  status         String   // ACTIVE, PAUSED, FINISHED
-  userId         String
-  textChannelId  String?
-  voiceChannelId String?
-  categoryId     String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id])
-  players        AdventurePlayer[]
-  scenes         Scene[]
-  inventory      InventoryItem[]
+  id            String            @id @default(cuid())
+  name          String
+  status        String            // ACTIVE, PAUSED, FINISHED
+  language      String            @default("en-US")
+  voiceType     String            @default("discord") // "discord" or "elevenlabs"
+  userId        String
+  textChannelId String?
+  categoryId    String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  // Relations
+  user          User              @relation(fields: [userId], references: [id])
+  players       AdventurePlayer[]
+  scenes        Scene[]
+  inventory     InventoryItem[]
 }
 
+// Joining table for adventures and characters
 model AdventurePlayer {
-  id          String    @id @default(uuid())
+  id          String    @id @default(cuid())
   adventureId String
   characterId String
-  adventure   Adventure @relation(fields: [adventureId], references: [id])
-  character   Character @relation(fields: [characterId], references: [id])
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  // Relations
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+  character   Character @relation(fields: [characterId], references: [id])
+
   @@unique([adventureId, characterId])
 }
 
-model Character {
-  id          String    @id @default(uuid())
-  name        String
-  class       String
-  level       Int       @default(1)
-  health      Int       @default(100)
-  mana        Int       @default(100)
-  experience  Int       @default(0)
-  userId      String
-  user        User      @relation(fields: [userId], references: [id])
-  adventures  AdventurePlayer[]
-  inventory   InventoryItem[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-}
-
+// Scene model for adventure progress
 model Scene {
-  id          String    @id @default(uuid())
+  id          String    @id @default(cuid())
   name        String
   description String
   adventureId String
-  adventure   Adventure @relation(fields: [adventureId], references: [id])
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  // Relations
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
 }
 
+// Inventory items
 model InventoryItem {
-  id          String    @id @default(uuid())
+  id          String     @id @default(cuid())
   name        String
-  type        String    // WEAPON, ARMOR, POTION, etc.
+  type        String     // WEAPON, ARMOR, POTION, etc.
   description String
   adventureId String
-  adventure   Adventure @relation(fields: [adventureId], references: [id])
   characterId String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  // Relations
+  adventure   Adventure  @relation(fields: [adventureId], references: [id])
   character   Character? @relation(fields: [characterId], references: [id])
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
 }
 
+// Friendship system
 model Friendship {
-  id        String   @id @default(uuid())
+  id        String   @id @default(cuid())
   userId    String
   friendId  String
   status    String   // PENDING, ACCEPTED, REJECTED
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Relations
   user      User     @relation("UserFriends", fields: [userId], references: [id])
   friend    User     @relation("FriendOf", fields: [friendId], references: [id])
+
   @@unique([userId, friendId])
 } 

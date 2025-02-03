@@ -23,18 +23,29 @@ import {
 import { PrismaClient } from '@prisma/client';
 import { handleJoinAdventure } from './commands/adventure';
 import { handleListFriends } from './commands/friend';
+import { handlePlayerAction } from './commands/adventure';
+import { handleAdventureSettings } from './commands/adventure';
+import dotenv from 'dotenv';
+import { handleDisconnectVoice } from './commands/adventure';
 
-config();
+dotenv.config();
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates,
     ]
 });
 
 const prisma = new PrismaClient();
+
+// Add this line to verify env vars are loaded
+console.log('Environment check:', {
+    hasElevenLabsKey: !!process.env.ELEVENLABS_API_KEY,
+    keyLength: process.env.ELEVENLABS_API_KEY?.length
+});
 
 const commands = [
     new SlashCommandBuilder()
@@ -88,9 +99,10 @@ const commands = [
         .setName('action')
         .setDescription('Perform an action in your adventure')
         .addStringOption(option =>
-            option.setName('description')
-            .setDescription('What would you like to do?')
-            .setRequired(true)
+            option
+                .setName('description')
+                .setDescription('What would you like to do?')
+                .setRequired(true)
         ),
     new SlashCommandBuilder()
         .setName('list_characters')
@@ -159,6 +171,32 @@ const commands = [
     new SlashCommandBuilder()
         .setName('list_friends')
         .setDescription('List all your friends'),
+    new SlashCommandBuilder()
+        .setName('adventure_settings')
+        .setDescription('Change adventure settings')
+        .addStringOption(option =>
+            option.setName('adventure_id')
+                .setDescription('The ID of the adventure')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('language')
+                .setDescription('Select language')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'English (US)', value: 'English (US)' },
+                    { name: 'Português (Brasil)', value: 'Português (Brasil)' }
+                ))
+        .addStringOption(option =>
+            option.setName('voice')
+                .setDescription('Select voice type')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Discord TTS', value: 'discord' },
+                    { name: 'ElevenLabs', value: 'elevenlabs' }
+                )),
+    new SlashCommandBuilder()
+        .setName('disconnect_voice')
+        .setDescription('Disconnect the bot from voice channel'),
 ].map(command => command.toJSON());
 
 client.once(Events.ClientReady, async (c) => {
@@ -343,58 +381,74 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (!interaction.isChatInputCommand()) return;
 
-    switch (interaction.commandName) {
-        case 'help':
-            await handleHelp(interaction);
-            break;
-        case 'register':
-            await handleRegister(interaction);
-            break;
-        case 'link_wallet':
-            await handleLinkWallet(interaction);
-            break;
-        case 'create_character':
-            await handleCreateCharacter(interaction);
-            break;
-        case 'start_adventure':
-            await handleStartAdventure(interaction);
-            break;
-        case 'action':
-            // Handle action command
-            break;
-        case 'list_characters':
-            await handleListCharacters(interaction);
-            break;
-        case 'list_adventures':
-            await handleListAdventures(interaction);
-            break;
-        case 'delete_character':
-            await handleDeleteCharacter(interaction);
-            break;
-        case 'delete_adventure':
-            await handleDeleteAdventure(interaction);
-            break;
-        case 'add_friend':
-            await handleAddFriend(interaction);
-            break;
-        case 'remove_friend':
-            await handleRemoveFriend(interaction);
-            break;
-        case 'accept_friend':
-            await handleAcceptFriend(interaction);
-            break;
-        case 'list_friend_requests':
-            await handleListFriendRequests(interaction);
-            break;
-        case 'join_adventure':
-            await handleJoinAdventure(interaction);
-            break;
-        case 'list_friends':
-            await handleListFriends(interaction);
-            break;
-        default:
-            // Handle unknown command
-            break;
+    try {
+        switch (interaction.commandName) {
+            case 'help':
+                await handleHelp(interaction);
+                break;
+            case 'register':
+                await handleRegister(interaction);
+                break;
+            case 'link_wallet':
+                await handleLinkWallet(interaction);
+                break;
+            case 'create_character':
+                await handleCreateCharacter(interaction);
+                break;
+            case 'start_adventure':
+                await handleStartAdventure(interaction);
+                break;
+            case 'action':
+                await handlePlayerAction(interaction);
+                break;
+            case 'list_characters':
+                await handleListCharacters(interaction);
+                break;
+            case 'list_adventures':
+                await handleListAdventures(interaction);
+                break;
+            case 'delete_character':
+                await handleDeleteCharacter(interaction);
+                break;
+            case 'delete_adventure':
+                await handleDeleteAdventure(interaction);
+                break;
+            case 'add_friend':
+                await handleAddFriend(interaction);
+                break;
+            case 'remove_friend':
+                await handleRemoveFriend(interaction);
+                break;
+            case 'accept_friend':
+                await handleAcceptFriend(interaction);
+                break;
+            case 'list_friend_requests':
+                await handleListFriendRequests(interaction);
+                break;
+            case 'join_adventure':
+                await handleJoinAdventure(interaction);
+                break;
+            case 'list_friends':
+                await handleListFriends(interaction);
+                break;
+            case 'adventure_settings':
+                await handleAdventureSettings(interaction);
+                break;
+            case 'disconnect_voice':
+                await handleDisconnectVoice(interaction);
+                break;
+            default:
+                // Handle unknown command
+                break;
+        }
+    } catch (error) {
+        console.error('Error handling command:', error);
+        const errorMessage = 'There was an error executing this command.';
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ content: errorMessage, ephemeral: true });
+        } else {
+            await interaction.reply({ content: errorMessage, ephemeral: true });
+        }
     }
 });
 

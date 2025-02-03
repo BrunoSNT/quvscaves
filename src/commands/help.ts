@@ -55,7 +55,7 @@ export async function handleHelp(interaction: ChatInputCommandInteraction) {
                     'ElizaOS responds to your actions with:',
                     '- [Narration] Scene descriptions',
                     '- [Dialogue] NPC conversations',
-                    '- [Choices] Available options',
+                    '- [Suggested Choices] Available options',
                     '- [Effects] Status changes'
                 ].join('\n')
             },
