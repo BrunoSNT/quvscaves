@@ -78,6 +78,11 @@ model Adventure {
   status        String            // ACTIVE, PAUSED, FINISHED
   language      String            @default("en-US")
   voiceType     String            @default("discord") // "discord" or "elevenlabs"
+  privacy       String            @default("public")  // "public", "friends_only", "private"
+  worldStyle    String            @default("high_fantasy") // high_fantasy, dark_fantasy, steampunk, etc
+  toneStyle     String            @default("heroic") // heroic, gritty, humorous, etc
+  magicLevel    String            @default("high") // high, low, none
+  setting       String?           @db.Text // Custom world setting description
   userId        String
   textChannelId String?
   categoryId    String?

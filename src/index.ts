@@ -202,23 +202,8 @@ const commands = [
         .addStringOption(option =>
             option.setName('adventure_id')
                 .setDescription('The ID of the adventure')
-                .setRequired(true))
-        .addStringOption(option =>
-            option.setName('language')
-                .setDescription('Select language')
-                .setRequired(false)
-                .addChoices(
-                    { name: 'English (US)', value: 'English (US)' },
-                    { name: 'Português (Brasil)', value: 'Português (Brasil)' }
-                ))
-        .addStringOption(option =>
-            option.setName('voice')
-                .setDescription('Select voice type')
-                .setRequired(false)
-                .addChoices(
-                    { name: 'Discord TTS', value: 'discord' },
-                    { name: 'ElevenLabs', value: 'elevenlabs' }
-                )),
+                .setRequired(true)
+                .setAutocomplete(true)),
     new SlashCommandBuilder()
         .setName('disconnect_voice')
         .setDescription('Disconnect the bot from voice channel'),
@@ -465,6 +450,34 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 if (!user) return;
 
+                await interaction.respond(
+                    user.adventures
+                        .filter(adv => adv.name.toLowerCase().includes(focusedValue))
+                        .map(adv => ({
+                            name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
+                            value: adv.id
+                        }))
+                );
+            }
+            else if (interaction.commandName === 'adventure_settings') {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id },
+                    include: {
+                        adventures: {
+                            include: {
+                                players: {
+                                    include: {
+                                        character: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (!user) return;
+
+                const focusedValue = interaction.options.getFocused().toLowerCase();
                 await interaction.respond(
                     user.adventures
                         .filter(adv => adv.name.toLowerCase().includes(focusedValue))
