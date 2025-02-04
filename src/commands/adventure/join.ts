@@ -1,8 +1,8 @@
 import { 
     ChatInputCommandInteraction, 
-    ChannelType as DiscordChannelType,
+    Snowflake as DiscordChannelType,
     TextChannel,
-    PermissionFlagsBits,
+    PermissionsBitField,
     GuildMember
 } from 'discord.js';
 import { prisma } from '../../lib/prisma';
@@ -110,11 +110,11 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                     permissionOverwrites: [
                         {
                             id: interaction.guild.id,
-                            deny: [PermissionFlagsBits.ViewChannel]
+                            deny: [PermissionsBitField.Flags.ViewChannel]
                         },
                         {
                             id: interaction.user.id,
-                            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+                            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
                         }
                     ]
                 });

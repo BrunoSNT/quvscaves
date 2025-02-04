@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction, ChannelType } from 'discord.js';
+import { ChatInputCommandInteraction, Snowflake as ChannelType } from 'discord.js';
 import { prisma } from '../../lib/prisma';
 import { createVoiceChannel, createTextChannel, createPlayerChannels } from './channels';
 import { logger } from '../../utils/logger';
