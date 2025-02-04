@@ -1,11 +1,10 @@
 import { config } from 'dotenv';
 import { 
-    Client, 
-    GatewayIntentBits, 
+    Client,
     Events, 
     SlashCommandBuilder,
     REST,
-    Routes
+    IntentsBitField as Intents
 } from 'discord.js';
 import { handleRegister } from './commands/register';
 import { handleHelp } from './commands/help';
@@ -20,32 +19,63 @@ import {
     handleAcceptFriend, 
     handleListFriendRequests 
 } from './commands/friend';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './lib/prisma';
 import { handleJoinAdventure } from './commands/adventure';
 import { handleListFriends } from './commands/friend';
 import { handlePlayerAction } from './commands/adventure';
 import { handleAdventureSettings } from './commands/adventure';
 import dotenv from 'dotenv';
 import { handleDisconnectVoice } from './commands/adventure';
+import { cleanupOldAudioFiles } from './utils/cleanup';
+import { logger } from './utils/logger';
 
 dotenv.config();
 
 const client = new Client({
     intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildVoiceStates,
+        Intents.Flags.Guilds,
+        Intents.Flags.GuildMessages,
+        Intents.Flags.MessageContent,
+        Intents.Flags.GuildVoiceStates,
     ]
 });
-
-const prisma = new PrismaClient();
 
 // Add this line to verify env vars are loaded
 console.log('Environment check:', {
     hasElevenLabsKey: !!process.env.ELEVENLABS_API_KEY,
     keyLength: process.env.ELEVENLABS_API_KEY?.length
 });
+
+// Types for our callbacks
+type FriendRequest = {
+    id: string;
+    user: { 
+        username: string;
+        characters: any[];
+    };
+};
+
+type Friend = {
+    friend: { characters: any[] };
+};
+
+type FriendOf = {
+    user: { characters: any[] };
+};
+
+type Character = {
+    name: string;
+    class: string;
+    level: number;
+    adventures: { adventure: { status: string } }[];
+};
+
+type Adventure = {
+    id: string;
+    name: string;
+    user: { username: string };
+    players: { character: { name: string } }[];
+};
 
 const commands = [
     new SlashCommandBuilder()
@@ -115,16 +145,18 @@ const commands = [
         .setDescription('Delete a character')
         .addStringOption(option =>
             option.setName('character_id')
-            .setDescription('The ID of the character to delete')
+            .setDescription('Select the character to delete')
             .setRequired(true)
+            .setAutocomplete(true)
         ),
     new SlashCommandBuilder()
         .setName('delete_adventure')
         .setDescription('Delete an adventure and its channels')
         .addStringOption(option =>
             option.setName('adventure_id')
-            .setDescription('The ID of the adventure to delete')
+            .setDescription('Select the adventure to delete')
             .setRequired(true)
+            .setAutocomplete(true)
         ),
     new SlashCommandBuilder()
         .setName('add_friend')
@@ -199,24 +231,37 @@ const commands = [
         .setDescription('Disconnect the bot from voice channel'),
 ].map(command => command.toJSON());
 
+// Schedule cleanup every 6 hours
+const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000;
+
 client.once(Events.ClientReady, async (c) => {
-    console.log(`Ready! Logged in as ${c.user.tag}`);
+    logger.info(`Ready! Logged in as ${c.user.tag}`);
     
     const rest = new REST().setToken(process.env.DISCORD_TOKEN!);
     try {
         await rest.put(
-            Routes.applicationCommands(c.user.id),
+            `/applications/${client.user!.id}/commands`,
             { body: commands }
         );
-        console.log('Successfully registered application commands.');
+        logger.info('Successfully registered application commands.');
+
+        // Schedule periodic cleanup
+        setInterval(cleanupOldAudioFiles, CLEANUP_INTERVAL);
+        // Run initial cleanup
+        cleanupOldAudioFiles().catch(error => 
+            logger.error('Error in initial cleanup:', error)
+        );
     } catch (error) {
-        console.error('Error registering commands:', error);
+        logger.error('Error registering commands:', error);
     }
 });
 
 client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isAutocomplete()) {
         try {
+            const focusedOption = interaction.options.getFocused(true);
+            const focusedValue = focusedOption.value.toString().toLowerCase();
+
             if (interaction.commandName === 'accept_friend') {
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id }
@@ -229,21 +274,26 @@ client.on(Events.InteractionCreate, async interaction => {
                         friendId: user.id,
                         status: 'PENDING'
                     },
-                    include: { user: true },
+                    include: { 
+                        user: {
+                            include: {
+                                characters: true
+                            }
+                        }
+                    },
                     take: 25
                 });
 
                 await interaction.respond(
-                    requests.map(req => ({
-                        name: `From: ${req.user.username}`,
-                        value: req.id
-                    }))
+                    requests
+                        .filter(req => req.user.username.toLowerCase().includes(focusedValue))
+                        .map((req: FriendRequest) => ({
+                            name: `From: ${req.user.username} (${req.user.characters.length} characters)`,
+                            value: req.id
+                        }))
                 );
             }
             else if (interaction.commandName === 'start_adventure') {
-                const focusedValue = interaction.options.getFocused();
-                console.log('Focused value:', focusedValue);
-                
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id },
                     include: {
@@ -281,10 +331,10 @@ client.on(Events.InteractionCreate, async interaction => {
                 // Get all available characters
                 const allCharacters = [
                     ...user.characters,
-                    ...user.friends.flatMap(f => f.friend.characters),
-                    ...user.friendOf.flatMap(f => f.user.characters)
+                    ...user.friends.flatMap((f: Friend) => f.friend.characters),
+                    ...user.friendOf.flatMap((f: FriendOf) => f.user.characters)
                 ].filter(char => {
-                    const nameMatches = char.name.toLowerCase().includes(focusedValue.toLowerCase());
+                    const nameMatches = char.name.toLowerCase().includes(focusedValue);
                     return nameMatches;
                 });
 
@@ -318,12 +368,12 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 if (focusedOption.name === 'character_name') {
                     // Get characters not in active adventures
-                    const availableCharacters = user.characters.filter(char => 
-                        !char.adventures.some(ap => ap.adventure.status === 'ACTIVE')
+                    const availableCharacters = user.characters.filter((char: Character) => 
+                        !char.adventures.some((ap: { adventure: { status: string } }) => ap.adventure.status === 'ACTIVE')
                     );
 
                     await interaction.respond(
-                        availableCharacters.map(char => ({
+                        availableCharacters.map((char: Character) => ({
                             name: `${char.name} (${char.class}) - Level ${char.level}`,
                             value: char.name
                         }))
@@ -366,12 +416,97 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
 
                     await interaction.respond(
-                        friendAdventures.map(adv => ({
+                        friendAdventures.map((adv: Adventure) => ({
                             name: `${adv.name} - by ${adv.user.username} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
                             value: adv.id
                         }))
                     );
                 }
+            }
+            else if (interaction.commandName === 'action') {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id },
+                    include: {
+                        adventures: {
+                            where: { status: 'ACTIVE' },
+                            include: {
+                                players: {
+                                    include: {
+                                        character: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (!user) return;
+
+                await interaction.respond(
+                    user.adventures.map(adv => ({
+                        name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
+                        value: adv.id
+                    }))
+                );
+            }
+            else if (interaction.commandName === 'delete_character') {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id },
+                    include: {
+                        characters: {
+                            include: {
+                                adventures: {
+                                    include: {
+                                        adventure: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (!user) return;
+
+                // Filter out characters in active adventures
+                const availableCharacters = user.characters.filter(char => 
+                    !char.adventures.some(ap => ap.adventure.status === 'ACTIVE')
+                );
+
+                await interaction.respond(
+                    availableCharacters
+                        .filter(char => char.name.toLowerCase().includes(focusedValue))
+                        .map(char => ({
+                            name: `${char.name} (${char.class}) - Level ${char.level}`,
+                            value: char.id
+                        }))
+                );
+            }
+            else if (interaction.commandName === 'delete_adventure') {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id },
+                    include: {
+                        adventures: {
+                            include: {
+                                players: {
+                                    include: {
+                                        character: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (!user) return;
+
+                await interaction.respond(
+                    user.adventures
+                        .filter(adv => adv.name.toLowerCase().includes(focusedValue))
+                        .map(adv => ({
+                            name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
+                            value: adv.id
+                        }))
+                );
             }
         } catch (error) {
             console.error('Error in autocomplete:', error);
@@ -449,6 +584,33 @@ client.on(Events.InteractionCreate, async interaction => {
         } else {
             await interaction.reply({ content: errorMessage, ephemeral: true });
         }
+    }
+});
+
+// Handle graceful shutdown
+process.on('SIGTERM', async () => {
+    logger.info('SIGTERM received. Starting graceful shutdown...');
+    try {
+        await cleanupOldAudioFiles();
+        await prisma.$disconnect();
+        client.destroy();
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+    }
+});
+
+process.on('SIGINT', async () => {
+    logger.info('SIGINT received. Starting graceful shutdown...');
+    try {
+        await cleanupOldAudioFiles();
+        await prisma.$disconnect();
+        client.destroy();
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
     }
 });
 

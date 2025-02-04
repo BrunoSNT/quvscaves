@@ -1,5 +1,6 @@
-import { ChatInputCommandInteraction, ChannelType } from 'discord.js';
-import { prisma } from '../lib/prisma';
+import { ChatInputCommandInteraction } from 'discord.js';
+import { prisma, type PrismaClient } from '../lib/prisma';
+import { logger } from '../utils/logger';
 
 export async function handleDeleteCharacter(interaction: ChatInputCommandInteraction) {
     try {
@@ -12,7 +13,7 @@ export async function handleDeleteCharacter(interaction: ChatInputCommandInterac
             where: { id: characterId },
             include: {
                 user: true,
-                adventurePlayers: {
+                adventures: {
                     include: {
                         adventure: true
                     }
@@ -38,8 +39,8 @@ export async function handleDeleteCharacter(interaction: ChatInputCommandInterac
         }
 
         // Check if character is in any active adventures
-        const activeAdventures = character.adventurePlayers.filter(
-            ap => ap.adventure.status === 'ACTIVE'
+        const activeAdventures = character.adventures.filter(
+            (ap: { adventure: { status: string } }) => ap.adventure.status === 'ACTIVE'
         );
 
         if (activeAdventures.length > 0) {
@@ -99,6 +100,11 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
             return;
         }
 
+        // Send initial response that we're processing
+        await interaction.editReply({
+            content: 'Deleting adventure and related channels...'
+        });
+
         // Delete related channels if they exist
         if (adventure.categoryId) {
             try {
@@ -112,52 +118,59 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
                     // Delete channels one by one with error handling
                     for (const channel of channels?.values() ?? []) {
                         await channel.delete().catch(err => {
-                            console.error(`Failed to delete channel ${channel.name}:`, err);
+                            logger.error(`Failed to delete channel ${channel.name}:`, err);
                         });
                     }
                     
                     // Delete the category itself
                     await category.delete().catch(err => {
-                        console.error('Failed to delete category:', err);
+                        logger.error('Failed to delete category:', err);
                     });
                 }
             } catch (err) {
-                console.error('Error handling Discord channels:', err);
+                logger.error('Error handling Discord channels:', err);
                 // Continue with database deletion even if channel deletion fails
             }
         }
 
         // Delete all related data in the correct order
-        await prisma.$transaction(async (prisma) => {
+        await prisma.$transaction(async (tx: Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">) => {
             // 1. Delete adventure players
-            await prisma.adventurePlayer.deleteMany({
+            await tx.adventurePlayer.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
             // 2. Delete scenes
-            await prisma.scene.deleteMany({
+            await tx.scene.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
             // 3. Delete inventory items
-            await prisma.inventoryItem.deleteMany({
+            await tx.inventoryItem.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
             // 4. Finally delete the adventure
-            await prisma.adventure.delete({
+            await tx.adventure.delete({
                 where: { id: adventure.id }
             });
         });
 
-        await interaction.editReply({
-            content: 'Adventure and all related channels have been deleted.'
+        // Send final success message
+        await interaction.followUp({
+            content: 'Adventure and all related channels have been deleted.',
+            ephemeral: true
         });
 
     } catch (error) {
-        console.error('Error deleting adventure:', error);
-        await interaction.editReply({
-            content: 'Failed to delete adventure. Please try again.'
-        }).catch(console.error);
+        logger.error('Error deleting adventure:', error);
+        // Use followUp instead of editReply for error message
+        await interaction.followUp({
+            content: 'Failed to delete adventure. Please try again.',
+            ephemeral: true
+        }).catch(() => {
+            // If even followUp fails, log it but don't throw
+            logger.error('Failed to send error message to user');
+        });
     }
 } 

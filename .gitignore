@@ -4,3 +4,4 @@ package-lock.json
 /audios
 .DS_Store
 pnpm-lock.yaml
+prisma/client

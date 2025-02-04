@@ -3,96 +3,33 @@ import { ChatInputCommandInteraction } from 'discord.js';
 import { prisma } from '../lib/prisma';
 import { speakInVoiceChannel } from '../lib/voice';
 import { getMessages } from '../utils/language';
+import { GameContext, GameState, Character, SupportedLanguage } from '../types/game';
+import { logger } from '../utils/logger';
+import { getGamePrompt, buildContextString, createFallbackResponse } from '../utils/gamePrompts';
 
-interface GameContext {
-    scene: string;
-    playerActions: string[];
-    characters: any[];
-    currentState: {
-        health: number;
-        mana: number;
-        inventory: string[];
-        questProgress: string;
-    };
-    language: 'en-US' | 'pt-BR';
+const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
+const AI_MODEL = process.env.AI_MODEL || 'qwen2.5:14b';
+
+interface AIResponse {
+    response?: string;
+    error?: string;
 }
 
 export async function generateResponse(context: GameContext): Promise<string> {
     try {
-        const language = context.language || 'en-US';
-        
-        const prompts = {
-            'en-US': {
-                intro: `You are ElizaOS, an advanced AI Game Master for a fantasy RPG set in a rich medieval fantasy world.
+        const language = context.language;
+        const prompt = getGamePrompt(language);
+        const contextStr = buildContextString(context, language);
 
-World Context:
-The realm is filled with magic, mythical creatures, and ancient mysteries. Cities bustle with merchants, adventurers, and guild members, while dangerous creatures lurk in the wilderness. Ancient ruins hold forgotten treasures and dark secrets.
+        logger.debug('Sending request to AI endpoint:', {
+            endpoint: AI_ENDPOINT,
+            model: AI_MODEL,
+            language,
+            contextLength: contextStr.length
+        });
 
-Response Format:
-[Narration] - Detailed scene description and action outcomes
-[Dialogue] - NPC responses and conversations
-[Atmosphere] - Environmental details and mood
-[Suggested Choices] - Available actions or decisions (3-4 interesting options)
-[Effects] - Any changes to health, mana, inventory, or status`,
-
-                sections: {
-                    narration: 'Narration',
-                    dialogue: 'Dialogue',
-                    atmosphere: 'Atmosphere',
-                    choices: 'Suggested Choices',
-                    effects: 'Effects'
-                }
-            },
-            'pt-BR': {
-                intro: `Você é ElizaOS, um Mestre de RPG controlado por IA em um mundo de fantasia medieval.
-                
-Contexto do Mundo:
-O reino está repleto de magia, criaturas míticas e mistérios antigos. Cidades pulsam com mercadores, aventureiros e membros de guildas, enquanto criaturas perigosas espreitam na natureza selvagem. Ruínas antigas guardam tesouros esquecidos e segredos sombrios.
-
-IMPORTANTE: TODAS AS RESPOSTAS DEVEM SER EM PORTUGUÊS DO BRASIL.
-NUNCA RESPONDA EM INGLÊS.
-
-Formato da Resposta:
-[Narração] - Descrição detalhada da cena e resultados das ações
-[Diálogo] - Respostas e conversas com NPCs
-[Atmosfera] - Detalhes do ambiente e clima
-[Sugestões de Ação] - Ações ou decisões disponíveis (3-4 opções interessantes)
-[Efeitos] - Mudanças em saúde, mana, inventário ou status`,
-
-                contextLabels: {
-                    scene: 'Cena Atual',
-                    characters: 'Personagens Presentes',
-                    status: 'Status do Jogador',
-                    health: 'Vida',
-                    mana: 'Mana',
-                    inventory: 'Inventário',
-                    progress: 'Progresso da Missão',
-                    action: 'Ação Recente',
-                    empty: 'Vazio'
-                }
-            }
-        };
-
-        const prompt = prompts[language];
-        if (!prompt) {
-            throw new Error(`Unsupported language: ${language}`);
-        }
-
-        // Build context in the correct language
-        const contextLabels = prompt.contextLabels || prompts['en-US'].contextLabels;
-        const contextStr = language === 'pt-BR' 
-            ? `\n\n${contextLabels.scene}: ${context.scene}\n\n` +
-              `${contextLabels.characters}:\n${context.characters.map(char => `- ${char.name} (${char.class})`).join('\n')}\n\n` +
-              `${contextLabels.status}:\n` +
-              `- ${contextLabels.health}: ${context.currentState.health}\n` +
-              `- ${contextLabels.mana}: ${context.currentState.mana}\n` +
-              `- ${contextLabels.inventory}: ${context.currentState.inventory.join(', ') || contextLabels.empty}\n` +
-              `- ${contextLabels.progress}: ${context.currentState.questProgress}\n\n` +
-              `${contextLabels.action}: ${context.playerActions[0]}`
-            : `\n\nCurrent Scene: ${context.scene}\n\n...`; // English version stays the same
-
-        const response = await axios.post('http://localhost:11434/api/generate', {
-            model: "qwen2.5:14b",
+        const response = await axios.post<AIResponse>(AI_ENDPOINT, {
+            model: AI_MODEL,
             prompt: prompt.intro + contextStr,
             temperature: 0.7,
             max_tokens: 2000,
@@ -102,108 +39,141 @@ Formato da Resposta:
             stream: false
         });
 
-        if (!response?.data?.response) {
-            console.error('Empty AI response:', response.data);
+        logger.debug('Raw AI response:', response.data);
+
+        if (!response?.data) {
+            logger.error('No response data from AI endpoint');
+            return createFallbackResponse(context);
+        }
+
+        if (response.data.error) {
+            logger.error('AI endpoint returned error:', response.data.error);
+            return createFallbackResponse(context);
+        }
+
+        if (!response.data.response) {
+            logger.error('Empty AI response:', response.data);
             return createFallbackResponse(context);
         }
 
         const aiResponse = response.data.response.trim();
         if (!aiResponse) {
-            console.error('Empty AI response after trim');
+            logger.error('Empty AI response after trim');
             return createFallbackResponse(context);
         }
 
-        if (!aiResponse.includes('[Narration]') && !aiResponse.includes('[Narração]')) {
-            console.error('Invalid AI response format:', aiResponse);
+        logger.debug('Processed AI response:', {
+            responseLength: aiResponse.length,
+            firstLine: aiResponse.split('\n')[0]
+        });
+
+        if (!validateResponseFormat(aiResponse, language)) {
+            logger.error('Invalid AI response format:', aiResponse);
             return createFallbackResponse(context);
         }
+
         return aiResponse;
 
     } catch (error) {
-        console.error('Error generating AI response:', error);
+        if (axios.isAxiosError(error)) {
+            logger.error('Axios error generating AI response:', {
+                status: error.response?.status,
+                statusText: error.response?.statusText,
+                data: error.response?.data,
+                message: error.message
+            });
+        } else {
+            logger.error('Error generating AI response:', error);
+        }
         return createFallbackResponse(context);
     }
 }
 
-function createFallbackResponse(context: GameContext): string {
-    const msgs = getMessages(context.language || 'en-US');
-    const character = context.characters[0];
-    const action = context.playerActions[0];
+function validateResponseFormat(response: string, language: SupportedLanguage): boolean {
+    const requiredSections = language === 'en-US' 
+        ? ['[Narration]', '[Dialogue]', '[Atmosphere]', '[Suggested Choices]', '[Effects]']
+        : ['[Narração]', '[Diálogo]', '[Atmosfera]', '[Sugestões de Ação]', '[Efeitos]'];
     
-    return [
-        msgs.defaultScenes.fallback.narration(character.name, action),
-        msgs.defaultScenes.fallback.dialogue,
-        msgs.defaultScenes.fallback.atmosphere,
-        msgs.defaultScenes.fallback.choices,
-        msgs.defaultScenes.fallback.effects
-    ].join('\n\n');
+    return requiredSections.some(section => response.includes(section));
 }
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
     try {
         const action = interaction.options.getString('description', true);
+        const adventureId = interaction.options.getString('adventureId', true);
+        
         const adventure = await prisma.adventure.findFirst({
-            where: {
-                userId: interaction.user.id,
-                status: 'ACTIVE'
-            },
+            where: { id: adventureId },
             include: {
-                characters: true,
+                players: {
+                    include: {
+                        character: true
+                    }
+                },
                 scenes: {
                     orderBy: {
                         createdAt: 'desc'
                     },
                     take: 1
-                },
-                inventory: true
+                }
             }
         });
 
         if (!adventure) {
             await interaction.reply({
-                content: 'You need to start an adventure first! Use `/start_adventure`',
+                content: getMessages(interaction.locale as SupportedLanguage).errors.adventureNotFound,
                 ephemeral: true
             });
             return;
         }
 
-        const character = adventure.characters[0];
+        const character = adventure.players[0]?.character;
+        if (!character) {
+            await interaction.reply({
+                content: getMessages(interaction.locale as SupportedLanguage).errors.characterNotFound,
+                ephemeral: true
+            });
+            return;
+        }
+
         const currentScene = adventure.scenes[0];
+        const gameState: GameState = {
+            health: character.health,
+            mana: character.mana,
+            inventory: [],
+            questProgress: adventure.status
+        };
 
         const context: GameContext = {
             scene: currentScene?.description || 'Starting a new adventure...',
             playerActions: [action],
-            characters: [character],
-            currentState: {
-                health: character?.health || 100,
-                mana: character?.mana || 100,
-                inventory: adventure.inventory?.map(item => item.name) || [],
-                questProgress: adventure.status
-            },
-            language: 'en-US'
+            characters: [character as Character],
+            currentState: gameState,
+            language: (adventure.language as SupportedLanguage) || 'en-US'
         };
 
         const response = await generateResponse(context);
         
-        // Send text response
         await interaction.reply({
             content: response,
             ephemeral: false
         });
 
-        // If voice channel exists, speak the response
-        if (adventure.voiceChannelId) {
+        if (adventure.categoryId) {
             await speakInVoiceChannel(
                 response,
-                adventure.voiceChannelId,
-                interaction.guild!
-            );
+                interaction.guild!,
+                adventure.categoryId,
+                adventureId
+            ).catch(error => {
+                logger.error('Error in voice playback:', error);
+            });
         }
 
     } catch (error) {
-        console.error('Error handling player action:', error);
+        logger.error('Error handling player action:', error);
         await interaction.reply({
-            content: 'Something went wrong processing your action. Please try again.',
+            content: getMessages(interaction.locale as SupportedLanguage).errors.genericError,
             ephemeral: true
         });
     }

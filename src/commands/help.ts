@@ -52,7 +52,7 @@ export async function handleHelp(interaction: ChatInputCommandInteraction) {
             {
                 name: '🤖 AI Game Master',
                 value: [
-                    'ElizaOS responds to your actions with:',
+                    'AI Game Master responds to your actions with:',
                     '- [Narration] Scene descriptions',
                     '- [Dialogue] NPC conversations',
                     '- [Suggested Choices] Available options',
@@ -63,10 +63,11 @@ export async function handleHelp(interaction: ChatInputCommandInteraction) {
                 name: '🔊 Voice & 💰 Payment Features',
                 value: [
                     '• AI Game Master speaks in voice channels',
-                    '• Use Solana wallet for:',
+                    '• Use Solana wallet to pay for:',
                     '  - Adventure sessions',
-                    '  - Special items',
-                    '  - Character upgrades'
+                    '  - Better voice',
+                    '  - New classes',
+                    '  - New adventure worlds',
                 ].join('\n')
             }
         )
