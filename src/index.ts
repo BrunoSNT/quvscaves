@@ -336,29 +336,21 @@ client.on(Events.InteractionCreate, async interaction => {
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id },
                     include: {
-                        characters: {
-                            include: {
-                                adventures: {
-                                    include: {
-                                        adventure: true
-                                    }
-                                }
-                            }
-                        }
+                        characters: true
                     }
                 });
 
                 if (!user) return;
 
                 if (focusedOption.name === 'character_name') {
-                    // Get characters not in active adventures
-                    const availableCharacters = user.characters.filter((char: Character) => 
-                        !char.adventures.some((ap: { adventure: { status: string } }) => ap.adventure.status === 'ACTIVE')
+                    const searchTerm = focusedOption.value.toLowerCase();
+                    const availableCharacters = user.characters.filter(char => 
+                        char.name.toLowerCase().includes(searchTerm)
                     );
 
                     await interaction.respond(
-                        availableCharacters.map((char: Character) => ({
-                            name: `${char.name} (${char.class}) - Level ${char.level}`,
+                        availableCharacters.map(char => ({
+                            name: `${char.name} (${char.class})`,
                             value: char.name
                         }))
                     );

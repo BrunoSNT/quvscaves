@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, ChannelType } from 'discord.js';
 import { prisma } from '../../lib/prisma';
 import { createVoiceChannel, createTextChannel, createPlayerChannels } from './channels';
 import { logger } from '../../utils/logger';
@@ -181,6 +181,22 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
         await textChannel.send(`Adventure started! Welcome ${characters.map((c: Character) => `<@${c.user.discordId}>`).join(', ')}!`);
         logger.debug('Adventure creation completed successfully');
+        
+        // Move the adventure creator to the Table voice channel
+        const tableVoiceChannel = interaction.guild.channels.cache.find(
+            channel => channel.name === 'Table' && 
+                      channel.type === ChannelType.GuildVoice &&
+                      channel.parentId === category.id
+        );
+
+        if (tableVoiceChannel && interaction.member?.voice) {
+            try {
+                await (interaction.member.voice as any).setChannel(tableVoiceChannel.id);
+                logger.debug('Moved adventure creator to Table voice channel');
+            } catch (error) {
+                logger.error('Failed to move user to Table voice channel:', error);
+            }
+        }
         
         return await interaction.editReply(`Adventure started! Head to ${textChannel}`);
     } catch (error: unknown) {
