@@ -73,7 +73,10 @@ type Character = {
 type Adventure = {
     id: string;
     name: string;
-    user: { username: string };
+    user: { 
+        id: string;
+        username: string 
+    };
     players: { character: { name: string } }[];
 };
 
@@ -116,12 +119,12 @@ const commands = [
             )
         ),
     new SlashCommandBuilder()
-        .setName('start_adventure')
-        .setDescription('Start a new adventure')
+        .setName('create_adventure')
+        .setDescription('Create a new adventure')
         .addStringOption(option =>
             option
                 .setName('players')
-                .setDescription('Select characters to include')
+                .setDescription('Select characters to include (comma-separated)')
                 .setRequired(true)
                 .setAutocomplete(true)
         ),
@@ -293,33 +296,11 @@ client.on(Events.InteractionCreate, async interaction => {
                         }))
                 );
             }
-            else if (interaction.commandName === 'start_adventure') {
+            else if (interaction.commandName === 'create_adventure') {
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id },
                     include: {
-                        characters: true,
-                        // Friends that the user added
-                        friends: {
-                            where: { status: 'ACCEPTED' },
-                            include: {
-                                friend: {
-                                    include: {
-                                        characters: true
-                                    }
-                                }
-                            }
-                        },
-                        // Friends that added the user
-                        friendOf: {
-                            where: { status: 'ACCEPTED' },
-                            include: {
-                                user: {
-                                    include: {
-                                        characters: true
-                                    }
-                                }
-                            }
-                        }
+                        characters: true
                     }
                 });
 
@@ -328,22 +309,25 @@ client.on(Events.InteractionCreate, async interaction => {
                     return;
                 }
 
-                // Get all available characters
-                const allCharacters = [
-                    ...user.characters,
-                    ...user.friends.flatMap((f: Friend) => f.friend.characters),
-                    ...user.friendOf.flatMap((f: FriendOf) => f.user.characters)
-                ].filter(char => {
-                    const nameMatches = char.name.toLowerCase().includes(focusedValue);
-                    return nameMatches;
+                // Get current input value and split by commas
+                const currentInput = focusedOption.value;
+                const selectedCharacters = currentInput.split(/,\s*/).filter(Boolean);
+                const searchTerm = selectedCharacters[selectedCharacters.length - 1]?.toLowerCase() || '';
+
+                // Get only user's own characters
+                const availableCharacters = user.characters.filter(char => {
+                    const nameMatches = char.name.toLowerCase().includes(searchTerm);
+                    // Don't show characters that are already selected
+                    const isNotSelected = !selectedCharacters.slice(0, -1).map(name => name.toLowerCase()).includes(char.name.toLowerCase());
+                    return nameMatches && isNotSelected;
                 });
 
                 await interaction.respond(
-                    allCharacters.slice(0, 25).map(char => ({
-                        // Show full info in the dropdown
-                        name: `${char.name} (${char.class}) - ${char.userId === user.id ? 'Your Character' : 'Friend\'s Character'}`,
-                        // But only use the name as the value
-                        value: char.name
+                    availableCharacters.slice(0, 25).map(char => ({
+                        name: `${char.name} (${char.class})`,
+                        value: selectedCharacters.length > 0
+                            ? [...selectedCharacters.slice(0, -1), char.name].join(', ')  // Keep all previous selections and add new one
+                            : char.name  // First selection
                     }))
                 );
             }
@@ -380,8 +364,8 @@ client.on(Events.InteractionCreate, async interaction => {
                     );
                 }
                 else if (focusedOption.name === 'adventure_id') {
-                    // Get friend's active adventures
-                    const friendAdventures = await prisma.adventure.findMany({
+                    // Get only friend's active adventures
+                    const adventures = await prisma.adventure.findMany({
                         where: {
                             status: 'ACTIVE',
                             user: {
@@ -416,8 +400,8 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
 
                     await interaction.respond(
-                        friendAdventures.map((adv: Adventure) => ({
-                            name: `${adv.name} - by ${adv.user.username} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
+                        adventures.map((adv: Adventure) => ({
+                            name: `${adv.name} - by ${adv.user.username} - Players: ${adv.players.map(p => p.character.name).join(', ')}`,
                             value: adv.id
                         }))
                     );
@@ -530,7 +514,7 @@ client.on(Events.InteractionCreate, async interaction => {
             case 'create_character':
                 await handleCreateCharacter(interaction);
                 break;
-            case 'start_adventure':
+            case 'create_adventure':
                 await handleStartAdventure(interaction);
                 break;
             case 'action':
