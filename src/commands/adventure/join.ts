@@ -1,6 +1,5 @@
 import { 
     ChatInputCommandInteraction, 
-    Snowflake as DiscordChannelType,
     TextChannel,
     PermissionsBitField,
     GuildMember
@@ -105,7 +104,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
             try {
                 const characterChannel = await interaction.guild.channels.create({
                     name: `${character.name.toLowerCase()}`,
-                    type: DiscordChannelType.GuildText,
+                    type: 0, // GuildText = 0
                     parent: adventure.categoryId || undefined,
                     permissionOverwrites: [
                         {
@@ -114,7 +113,20 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                         },
                         {
                             id: interaction.user.id,
-                            allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
+                            allow: [
+                                PermissionsBitField.Flags.ViewChannel, 
+                                PermissionsBitField.Flags.SendMessages,
+                                PermissionsBitField.Flags.ReadMessageHistory
+                            ]
+                        },
+                        {
+                            id: interaction.client.user!.id,
+                            allow: [
+                                PermissionsBitField.Flags.ViewChannel,
+                                PermissionsBitField.Flags.SendMessages,
+                                PermissionsBitField.Flags.ManageChannels,
+                                PermissionsBitField.Flags.ManageRoles
+                            ]
                         }
                     ]
                 });
@@ -125,12 +137,17 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                     if (adventureOwner) {
                         await characterChannel.permissionOverwrites.create(adventureOwner, {
                             ViewChannel: true,
-                            SendMessages: true
+                            SendMessages: true,
+                            ReadMessageHistory: true
                         });
                     }
                 } catch (error) {
                     logger.error('Error setting adventure owner permissions:', {
-                        error,
+                        error: error instanceof Error ? { 
+                            message: error.message, 
+                            name: error.name, 
+                            stack: error.stack 
+                        } : error,
                         ownerDiscordId: adventure.user.discordId
                     });
                 }
@@ -140,7 +157,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                 // Find the adventure-log channel
                 const adventureLogChannel = interaction.guild.channels.cache.find(
                     channel => channel.name === 'adventure-log' && 
-                              channel.type === DiscordChannelType.GuildText &&
+                              channel.type === 0 && // GuildText = 0
                               channel.parentId === adventure.categoryId
                 ) as TextChannel;
 
@@ -161,7 +178,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                 // Move user to the Table voice channel
                 const tableVoiceChannel = interaction.guild.channels.cache.find(
                     channel => channel.name === 'Table' && 
-                              channel.type === DiscordChannelType.GuildVoice &&
+                              channel.type === 2 && // GuildVoice = 2
                               channel.parentId === adventure.categoryId
                 );
 
@@ -171,7 +188,15 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                         await member.voice.setChannel(tableVoiceChannel.id);
                         logger.debug('Moved user to Table voice channel');
                     } catch (error) {
-                        logger.error('Failed to move user to Table voice channel:', error);
+                        logger.error('Failed to move user to Table voice channel:', {
+                            error: error instanceof Error ? { 
+                                message: error.message, 
+                                name: error.name, 
+                                stack: error.stack 
+                            } : error,
+                            userId: member.id,
+                            channelId: tableVoiceChannel.id
+                        });
                     }
                 }
 
@@ -180,7 +205,11 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                 });
             } catch (error) {
                 logger.error('Error creating channels:', { 
-                    error,
+                    error: error instanceof Error ? { 
+                        message: error.message, 
+                        name: error.name, 
+                        stack: error.stack 
+                    } : error,
                     guildId: interaction.guild.id,
                     categoryId: adventure.categoryId,
                     characterName: character.name,

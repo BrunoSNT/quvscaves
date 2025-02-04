@@ -1,4 +1,10 @@
-import { ChatInputCommandInteraction, Snowflake as ChannelType } from 'discord.js';
+import { 
+    ChatInputCommandInteraction, 
+    TextChannel,
+    CategoryChannel,
+    GuildMember,
+    VoiceChannel
+} from 'discord.js';
 import { prisma } from '../../lib/prisma';
 import { createVoiceChannel, createTextChannel, createPlayerChannels } from './channels';
 import { logger } from '../../utils/logger';
@@ -185,9 +191,8 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
         // Move the adventure creator to the Table voice channel
         const tableVoiceChannel = interaction.guild.channels.cache.find(
             channel => channel.name === 'Table' && 
-                      channel.type === ChannelType.GuildVoice &&
                       channel.parentId === category.id
-        );
+        ) as VoiceChannel;
 
         if (tableVoiceChannel && interaction.member?.voice) {
             try {

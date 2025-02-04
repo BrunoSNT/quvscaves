@@ -29,13 +29,42 @@ model Character {
   id          String            @id @default(cuid())
   name        String
   class       String
+  race        String
   level       Int               @default(1)
-  health      Int               @default(100)
-  mana        Int               @default(100)
   experience  Int               @default(0)
+  
+  // Base Stats
+  strength     Int              @default(10)
+  dexterity    Int              @default(10)
+  constitution Int              @default(10)
+  intelligence Int              @default(10)
+  wisdom       Int              @default(10)
+  charisma     Int              @default(10)
+  
+  // Derived Stats
+  health      Int               @default(100)
+  maxHealth   Int               @default(100)
+  mana        Int               @default(100)
+  maxMana     Int               @default(100)
+  
+  // Background
+  background  String?           @db.Text
+  appearance  String?           @db.Text
+  personality String?           @db.Text
+  alignment   String?
+  
+  // Equipment and Skills
+  armorClass  Int               @default(10)
+  initiative  Int               @default(0)
+  speed       Int               @default(30)
+  proficiencies String[]        @default([])
+  languages   String[]          @default([])
+  
+  // Metadata
   userId      String
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
+  
   // Relations
   user        User              @relation(fields: [userId], references: [id])
   adventures  AdventurePlayer[]

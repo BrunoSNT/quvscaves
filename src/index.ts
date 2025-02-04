@@ -102,21 +102,11 @@ const commands = [
         ),
     new SlashCommandBuilder()
         .setName('create_character')
-        .setDescription('Create a new character')
+        .setDescription('Create a new RPG character')
         .addStringOption(option => 
             option.setName('name')
-            .setDescription('Character name')
+            .setDescription('Your character name')
             .setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName('class')
-            .setDescription('Character class')
-            .setRequired(true)
-            .addChoices(
-                { name: 'Warrior', value: 'warrior' },
-                { name: 'Mage', value: 'mage' },
-                { name: 'Rogue', value: 'rogue' }
-            )
         ),
     new SlashCommandBuilder()
         .setName('create_adventure')
