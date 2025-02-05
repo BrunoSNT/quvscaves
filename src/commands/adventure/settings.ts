@@ -300,10 +300,10 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
 
             updates[settingType === 'voice' ? 'voiceType' : settingType] = newValue;
 
-            await prisma.adventure.update({
-                where: { id: adventureId },
-                data: updates
-            });
+        await prisma.adventure.update({
+            where: { id: adventureId },
+            data: updates
+        });
 
             await valueInteraction.update({
                 content: `Successfully updated ${settingType.replace(/_/g, ' ')} to: ${newValue}`,

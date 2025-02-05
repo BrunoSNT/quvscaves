@@ -342,7 +342,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
             const privacy = privacyInteraction.customId as AdventurePrivacy;
 
-            // Create channels
+        // Create channels
             await privacyInteraction.update({
                 content: 'Creating adventure channels...',
                 components: []
@@ -358,8 +358,8 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             }
             logger.debug('Created category:', { categoryId: category.id });
 
-            const textChannel = await createTextChannel(category, 'adventure-log');
-            if (!textChannel) {
+        const textChannel = await createTextChannel(category, 'adventure-log');
+        if (!textChannel) {
                 return await interaction.editReply('Failed to create text channel');
             }
             logger.debug('Created text channel:', { textChannelId: textChannel.id });
@@ -372,8 +372,8 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             logger.debug('Created player channels:', playerChannels.map(c => c.id));
 
             // Create adventure with all settings
-            const adventure = await prisma.adventure.create({
-                data: {
+        const adventure = await prisma.adventure.create({
+            data: {
                     name: adventureName,
                     status: 'ACTIVE' as AdventureStatus,
                     language,
@@ -382,8 +382,8 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     worldStyle,
                     toneStyle,
                     magicLevel,
-                    userId: user.id,
-                    categoryId: category.id,
+                userId: user.id,
+                categoryId: category.id,
                     textChannelId: textChannel.id
                 }
             });
@@ -447,7 +447,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
             return await interaction.editReply(`Adventure started! Head to ${textChannel}`);
 
-        } catch (error) {
+    } catch (error) {
             if (error instanceof Error && error.name === 'Error [InteractionCollectorError]') {
                 await interaction.editReply({
                     content: 'Adventure creation timed out. Please try again.',
