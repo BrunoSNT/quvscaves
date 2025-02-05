@@ -26,6 +26,15 @@ const CLASS_COLORS = {
     paladin: 0xFFFF44     // Yellow
 } as const;
 
+const CLASS_THUMBNAILS = {
+    warrior: 'https://i.imgur.com/O5IopJh.jpeg',  // Warrior/Fighter icon
+    mage: 'https://i.imgur.com/zdNccaF.jpeg',     // Mage/Wizard icon
+    rogue: 'https://i.imgur.com/cCwRIqs.jpeg',    // Rogue/Thief icon
+    cleric: 'https://i.imgur.com/v91nQW5.jpeg',   // Cleric/Priest icon
+    ranger: 'https://i.imgur.com/Nfbganl.jpeg',   // Ranger/Hunter icon
+    paladin: 'https://i.imgur.com/v2SaOqi.jpeg'   // Paladin icon
+} as const;
+
 function getClassColor(characterClass: string): number {
     return CLASS_COLORS[characterClass.toLowerCase() as keyof typeof CLASS_COLORS] || 0x2B2D31;
 }
@@ -39,16 +48,16 @@ function getStatusEmoji(type: 'positive' | 'negative' | 'neutral'): string {
 }
 
 function formatStats(character: Character): string {
-    return `STR: ${character.strength.toString().padStart(2)}          DEX: ${character.dexterity.toString().padStart(2)}          CON: ${character.constitution.toString().padStart(2)}
-INT: ${character.intelligence.toString().padStart(2)}          WIS: ${character.wisdom.toString().padStart(2)}          CHA: ${character.charisma.toString().padStart(2)}`;
+    return `\nSTR: ${character.strength.toString().padStart(2)}\nDEX: ${character.dexterity.toString().padStart(2)}\nCON: ${character.constitution.toString().padStart(2)}
+INT: ${character.intelligence.toString().padStart(2)}\nWIS: ${character.wisdom.toString().padStart(2)}\nCHA: ${character.charisma.toString().padStart(2)}`;
 }
 
 function formatCombatStats(character: Character): string {
     const currentHealth = Math.min(character.health, character.maxHealth);
     const currentMana = Math.min(character.mana, character.maxMana);
 
-    return `❤️ HP: ${currentHealth.toString().padStart(3)}/${character.maxHealth.toString().padStart(3)}     \u200B     🔮 MP: ${currentMana.toString().padStart(3)}/${character.maxMana.toString().padStart(3)}
-🛡️ AC: ${character.armorClass.toString().padStart(2)}    \u200B      ⚡ Init: ${character.initiative.toString().padStart(2)}     \u200B     👣 Speed: ${character.speed}ft`;
+    return `\n❤️ HP: ${currentHealth.toString().padStart(3)}/${character.maxHealth.toString().padStart(3)} \n 🔮 MP: ${currentMana.toString().padStart(3)}/${character.maxMana.toString().padStart(3)}
+🛡️ AC: ${character.armorClass.toString().padStart(2)} \n ⚡ Init: ${character.initiative.toString().padStart(2)} \n 👣 Speed: ${character.speed}ft`;
 }
 
 function formatInventory(items: any[] = []): string {
@@ -87,7 +96,7 @@ function formatStatusEffects(effects: StatusEffect[]): string {
     }).join('\n\n');
 }
 
-function createProgressBar(current: number, max: number, size: number = 60): string {
+function createProgressBar(current: number, max: number, size: number = 50): string {
     const progress = Math.min(Math.floor((current / max) * size), size);
     const filled = '█'.repeat(progress);
     const empty = '▒'.repeat(size - progress);
@@ -111,11 +120,13 @@ export function formatCharacterSheet(character: CharacterWithRelations, statusEf
     const nextLevelXP = getXPForNextLevel(character.level);
     const xpProgress = createProgressBar(character.experience % nextLevelXP, nextLevelXP);
     const classColor = getClassColor(character.class);
+    const thumbnailUrl = CLASS_THUMBNAILS[character.class.toLowerCase() as keyof typeof CLASS_THUMBNAILS] || 'https://i.imgur.com/AfFp7pu.png';
 
     const embed = new EmbedBuilder()
         .setTitle(`${character.name}`)
         .setDescription(`Level ${character.level} ${character.race} ${character.class}\n\u200B`)
         .setColor(classColor)
+        .setThumbnail(thumbnailUrl)
         .addFields(
             // Left Side
             { 
