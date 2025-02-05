@@ -74,7 +74,16 @@ export function buildContextString(context: GameContext, language: SupportedLang
 ${labels.scene}: ${context.scene}
 
 ${labels.characters}:
-${context.characters.map(char => `- ${char.name} (${char.class})`).join('\n')}
+${context.characters.map(char => {
+    const spells = char.spells?.map(s => `  - ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n') || 'None';
+    const abilities = char.abilities?.map(a => `  - ${a.name}`).join('\n') || 'None';
+    
+    return `- ${char.name} (${char.class})
+  Spells:
+${spells}
+  Abilities:
+${abilities}`;
+}).join('\n\n')}
 
 ${labels.status}:
 - ${labels.health}: ${context.currentState.health}

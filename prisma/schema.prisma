@@ -46,19 +46,19 @@ model Character {
   maxHealth   Int               @default(100)
   mana        Int               @default(100)
   maxMana     Int               @default(100)
+  armorClass  Int               @default(10)
+  initiative  Int               @default(0)
+  speed       Int               @default(30)
+  
+  // Equipment and Skills
+  proficiencies String[]        @default([])
+  languages    String[]         @default([])
   
   // Background
   background  String?           @db.Text
   appearance  String?           @db.Text
   personality String?           @db.Text
   alignment   String?
-  
-  // Equipment and Skills
-  armorClass  Int               @default(10)
-  initiative  Int               @default(0)
-  speed       Int               @default(30)
-  proficiencies String[]        @default([])
-  languages   String[]          @default([])
   
   // Metadata
   userId      String
@@ -69,6 +69,8 @@ model Character {
   user        User              @relation(fields: [userId], references: [id])
   adventures  AdventurePlayer[]
   inventory   InventoryItem[]
+  spells      Spell[]
+  abilities   Ability[]
 }
 
 // Adventure model
@@ -149,4 +151,31 @@ model Friendship {
   friend    User     @relation("FriendOf", fields: [friendId], references: [id])
 
   @@unique([userId, friendId])
+}
+
+// Spell model
+model Spell {
+    id          String    @id @default(cuid())
+    name        String
+    level       Int       // 0 for cantrips
+    school      String    // e.g., Evocation, Abjuration, etc.
+    description String    @db.Text
+    castingTime String
+    range       String
+    duration    String
+    components  String[]
+    characterId String
+    character   Character @relation(fields: [characterId], references: [id])
+}
+
+// Ability model
+model Ability {
+    id          String    @id @default(cuid())
+    name        String
+    type        String    // class feature, racial trait, etc.
+    description String    @db.Text
+    uses        Int?      // null for unlimited uses
+    recharge    String?   // e.g., "short rest", "long rest"
+    characterId String
+    character   Character @relation(fields: [characterId], references: [id])
 } 

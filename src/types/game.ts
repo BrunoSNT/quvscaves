@@ -27,14 +27,64 @@ export type MagicLevel =
     | 'low'             // Magic is rare and mysterious
     | 'none';           // No magic, purely mundane world
 
+export interface Spell {
+    id: string;
+    name: string;
+    level: number;
+    school: string;
+    description: string;
+    castingTime: string;
+    range: string;
+    duration: string;
+    components: string[];
+}
+
+export interface Ability {
+    id: string;
+    name: string;
+    type: string;
+    description: string;
+    uses?: number;
+    recharge?: string;
+}
+
 export interface Character {
     id: string;
     name: string;
     class: CharacterClass;
+    race: string;
     level: number;
-    health: number;
-    mana: number;
     experience: number;
+    
+    // Base Stats
+    strength: number;
+    dexterity: number;
+    constitution: number;
+    intelligence: number;
+    wisdom: number;
+    charisma: number;
+    
+    // Derived Stats
+    health: number;
+    maxHealth: number;
+    mana: number;
+    maxMana: number;
+    armorClass: number;
+    initiative: number;
+    speed: number;
+    
+    // Equipment and Skills
+    proficiencies: string[];
+    languages: string[];
+    
+    // Optional relations
+    spells?: Spell[];
+    abilities?: Ability[];
+    inventory?: any[]; // We'll define a proper type for this later
+    
+    // Metadata
+    createdAt?: Date;
+    updatedAt?: Date;
 }
 
 export interface GameState {

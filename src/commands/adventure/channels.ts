@@ -1,5 +1,11 @@
 import { Guild, CategoryChannel, TextChannel, PermissionsBitField, GuildBasedChannel } from 'discord.js';
 import { logger } from '../../utils/logger';
+import { updateCharacterSheet } from '../../utils/character';
+import { prisma } from '../../lib/prisma';
+
+type CharacterWithUser = Awaited<ReturnType<typeof prisma.character.findFirst>> & {
+    user: { discordId: string }
+};
 
 export async function createVoiceChannel(guild: Guild, name: string): Promise<CategoryChannel | null> {
     try {
@@ -97,7 +103,7 @@ export async function createTextChannel(category: CategoryChannel, name: string)
     }
 }
 
-export async function createPlayerChannels(category: CategoryChannel, characters: { name: string; user: { discordId: string } }[]): Promise<TextChannel[]> {
+export async function createPlayerChannels(category: CategoryChannel, characters: CharacterWithUser[]): Promise<TextChannel[]> {
     const channels: TextChannel[] = [];
     
     try {
@@ -130,6 +136,20 @@ export async function createPlayerChannels(category: CategoryChannel, characters
                     }
                 ]
             }) as TextChannel;
+            
+            // Initialize character sheet
+            const characterWithRelations = await prisma.character.findUnique({
+                where: { id: character.id },
+                include: {
+                    spells: true,
+                    abilities: true,
+                    inventory: true
+                }
+            });
+
+            if (characterWithRelations) {
+                await updateCharacterSheet(characterWithRelations, channel);
+            }
             
             channels.push(channel);
         }

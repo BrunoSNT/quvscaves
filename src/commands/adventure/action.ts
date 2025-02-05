@@ -2,9 +2,10 @@ import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, T
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
-import { SupportedLanguage, GameContext, GameState, CharacterClass } from '../../types/game';
+import { SupportedLanguage, GameContext, GameState, CharacterClass, Character } from '../../types/game';
 import { generateResponse } from '../../ai/gamemaster';
 import { speakInVoiceChannel } from '../../lib/voice';
+import { updateCharacterSheet, StatusEffect, ParsedEffects } from '../../utils';
 
 type AdventurePlayerWithCharacter = {
     adventureId: string;
@@ -13,16 +14,136 @@ type AdventurePlayerWithCharacter = {
         userId: string;
         id: string;
         name: string;
-        health: number;
-        mana: number;
         class: string;
+        race: string;
         level: number;
         experience: number;
+        health: number;
+        maxHealth: number;
+        mana: number;
+        maxMana: number;
+        strength: number;
+        dexterity: number;
+        constitution: number;
+        intelligence: number;
+        wisdom: number;
+        charisma: number;
+        armorClass: number;
+        initiative: number;
+        speed: number;
+        proficiencies: string[];
+        languages: string[];
+        spells: any[];
+        abilities: any[];
+        inventory: any[];
         user: {
             discordId: string;
         };
     }
 };
+
+function parseEffects(effectsText: string): ParsedEffects {
+    const effects: StatusEffect[] = [];
+    const result: ParsedEffects = { 
+        statusEffects: effects, 
+        healthChange: 0, 
+        manaChange: 0,
+        experienceChange: 0
+    };
+    
+    // Match status effects like "+2 Intriga" or "Alerta: +3"
+    const statusRegex = /\+(\d+)\s+([^,\n]+)|(\w+):\s*\+(\d+)/g;
+    let match;
+    while ((match = statusRegex.exec(effectsText)) !== null) {
+        const value = parseInt(match[1] || match[4]);
+        const name = match[2] || match[3];
+        if (name && !isNaN(value)) {
+            effects.push({
+                name: name.trim(),
+                value: value,
+                type: determineEffectType(name)
+            });
+        }
+    }
+
+    // Match health changes (both gains and losses)
+    const healthGainRegex = /recuperando (\d+) pontos de vida/i;
+    const healthLossRegex = /perder (\d+) pontos de vida/i;
+    const absoluteHealthRegex = /vida:?\s*(\d+)/i;
+    
+    const healthGainMatch = effectsText.match(healthGainRegex);
+    const healthLossMatch = effectsText.match(healthLossRegex);
+    const absoluteHealthMatch = effectsText.match(absoluteHealthRegex);
+    
+    if (healthGainMatch) {
+        result.healthChange = parseInt(healthGainMatch[1]);
+    } else if (healthLossMatch) {
+        result.healthChange = -parseInt(healthLossMatch[1]);
+    } else if (absoluteHealthMatch) {
+        result.absoluteHealth = parseInt(absoluteHealthMatch[1]);
+    }
+
+    // Match mana changes
+    const manaChangeRegex = /(\d+) pontos de mana/i;
+    const absoluteManaRegex = /mana:?\s*(\d+)/i;
+    const manaMatch = effectsText.match(manaChangeRegex);
+    const absoluteManaMatch = effectsText.match(absoluteManaRegex);
+
+    if (manaMatch) {
+        result.manaChange = effectsText.toLowerCase().includes('consumiu') ? -parseInt(manaMatch[1]) : parseInt(manaMatch[1]);
+    } else if (absoluteManaMatch) {
+        result.absoluteMana = parseInt(absoluteManaMatch[1]);
+    }
+
+    // Match experience changes
+    const xpRegex = /(\+|-)?\s*(\d+)\s*(xp|experiência)/i;
+    const xpMatch = effectsText.match(xpRegex);
+    if (xpMatch) {
+        const multiplier = xpMatch[1] === '-' ? -1 : 1;
+        result.experienceChange = multiplier * parseInt(xpMatch[2]);
+    }
+
+    return result;
+}
+
+function determineEffectType(effectName: string): 'positive' | 'negative' | 'neutral' {
+    const positiveEffects = ['alerta', 'força', 'proteção', 'inspiração'];
+    const negativeEffects = ['veneno', 'medo', 'fraqueza', 'confusão'];
+    
+    effectName = effectName.toLowerCase();
+    if (positiveEffects.some(effect => effectName.includes(effect))) return 'positive';
+    if (negativeEffects.some(effect => effectName.includes(effect))) return 'negative';
+    return 'neutral';
+}
+
+function toGameCharacter(dbChar: any): Character {
+    return {
+        id: dbChar.id,
+        name: dbChar.name,
+        class: dbChar.class as CharacterClass,
+        race: dbChar.race || 'unknown',
+        level: dbChar.level || 1,
+        experience: dbChar.experience || 0,
+        strength: dbChar.strength || 10,
+        dexterity: dbChar.dexterity || 10,
+        constitution: dbChar.constitution || 10,
+        intelligence: dbChar.intelligence || 10,
+        wisdom: dbChar.wisdom || 10,
+        charisma: dbChar.charisma || 10,
+        health: dbChar.health || 100,
+        maxHealth: dbChar.maxHealth || 100,
+        mana: dbChar.mana || 100,
+        maxMana: dbChar.maxMana || 100,
+        armorClass: dbChar.armorClass || 10,
+        initiative: dbChar.initiative || 0,
+        speed: dbChar.speed || 30,
+        proficiencies: dbChar.proficiencies || [],
+        languages: dbChar.languages || [],
+        spells: dbChar.spells || [],
+        abilities: dbChar.abilities || [],
+        inventory: dbChar.inventory || []
+    };
+}
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
     try {
@@ -51,7 +172,10 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                     include: {
                         character: {
                             include: {
-                                user: true
+                                user: true,
+                                spells: true,
+                                abilities: true,
+                                inventory: true
                             }
                         }
                     }
@@ -104,12 +228,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         const context: GameContext = {
             scene: currentScene?.description || 'Starting a new adventure...',
             playerActions: [action],
-            characters: userAdventure.players.map((p: AdventurePlayerWithCharacter) => ({
-                ...p.character,
-                class: p.character.class as CharacterClass,
-                level: p.character.level || 1,
-                experience: p.character.experience || 0
-            })),
+            characters: userAdventure.players.map(p => toGameCharacter(p.character)),
             currentState: gameState,
             language: (userAdventure.language as SupportedLanguage) || 'en-US'
         };
@@ -181,6 +300,73 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                 content: mechanicSections.join('\n\n'),
                 tts: false
             });
+
+            // Parse effects from the [Effects] section
+            const effectsSection = mechanicSections.find(section => 
+                section.startsWith('[Effects]') || 
+                section.startsWith('[Efeitos]')
+            );
+
+            if (effectsSection) {
+                const { 
+                    statusEffects, 
+                    healthChange, 
+                    manaChange, 
+                    experienceChange,
+                    absoluteHealth,
+                    absoluteMana
+                } = parseEffects(effectsSection);
+                
+                // Update character stats if needed
+                if (healthChange || manaChange || experienceChange || absoluteHealth !== undefined || absoluteMana !== undefined) {
+                    const updateData: any = {};
+                    
+                    // Handle health changes
+                    if (absoluteHealth !== undefined) {
+                        updateData.health = Math.min(absoluteHealth, userCharacter.maxHealth);
+                    } else if (healthChange) {
+                        updateData.health = Math.min(
+                            userCharacter.maxHealth,
+                            Math.max(0, userCharacter.health + healthChange)
+                        );
+                    }
+                    
+                    // Handle mana changes
+                    if (absoluteMana !== undefined) {
+                        updateData.mana = Math.min(absoluteMana, userCharacter.maxMana);
+                    } else if (manaChange) {
+                        updateData.mana = Math.min(
+                            userCharacter.maxMana,
+                            Math.max(0, userCharacter.mana + manaChange)
+                        );
+                    }
+
+                    // Handle experience changes
+                    if (experienceChange) {
+                        updateData.experience = Math.max(0, userCharacter.experience + experienceChange);
+                    }
+
+                    // Update character in database
+                    const updatedCharacter = await prisma.character.update({
+                        where: { id: userCharacter.id },
+                        data: updateData
+                    });
+                    
+                    // Update local character object
+                    Object.assign(userCharacter, updatedCharacter);
+                }
+
+                // Find and update character sheet
+                const characterChannel = interaction.guild!.channels.cache.find(
+                    channel => 
+                        channel.name === userCharacter.name.toLowerCase().replace(/\s+/g, '-') &&
+                        channel.parentId === userAdventure.categoryId
+                ) as TextChannel;
+
+                if (characterChannel) {
+                    await updateCharacterSheet(userCharacter, characterChannel, statusEffects);
+                }
+            }
         }
 
         // Update the deferred reply

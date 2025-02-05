@@ -365,7 +365,14 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             logger.debug('Created text channel:', { textChannelId: textChannel.id });
 
             // Create player-specific channels
-            const playerChannels = await createPlayerChannels(category, characters);
+            const charactersWithUsers = await Promise.all(characters.map(async (char) => {
+                const fullChar = await prisma.character.findUnique({
+                    where: { id: char.id },
+                    include: { user: true }
+                });
+                return fullChar!;
+            }));
+            const playerChannels = await createPlayerChannels(category, charactersWithUsers);
             if (playerChannels.length === 0) {
                 return await interaction.editReply('Failed to create player channels');
             }

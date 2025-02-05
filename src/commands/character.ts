@@ -523,28 +523,29 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
 
             // Final response with all stats
             const response = [
-                `✨ Character created successfully! ✨\n`,
-                `**${character.name}** - Level ${character.level} ${character.race} ${character.class}`,
-                `Alignment: ${character.alignment}`,
-                `\nBase Stats:`,
-                `- Strength: ${character.strength}`,
-                `- Dexterity: ${character.dexterity}`,
-                `- Constitution: ${character.constitution}`,
-                `- Intelligence: ${character.intelligence}`,
-                `- Wisdom: ${character.wisdom}`,
-                `- Charisma: ${character.charisma}`,
-                `\nDerived Stats:`,
-                `- Health: ${character.health}/${character.maxHealth}`,
-                `- Mana: ${character.mana}/${character.maxMana}`,
-                `- Armor Class: ${character.armorClass}`,
-                `- Initiative: ${character.initiative}`,
-                `- Speed: ${character.speed} ft`,
-                `\nProficiencies: ${character.proficiencies.join(', ')}`,
-                `Languages: ${character.languages.join(', ')}`,
+                `\n✨ Character created successfully! ✨\n`,
+                `**${character.name}**`,
+                `Level ${character.level} ${character.race} ${character.class}\n`,
+                `Alignment:  ${character.alignment}\n`,
+                `📊 Base Stats:`,
+                `  • Strength     │  ${character.strength.toString().padStart(2)} ${getModifierString(character.strength)}`,
+                `  • Dexterity    │  ${character.dexterity.toString().padStart(2)} ${getModifierString(character.dexterity)}`,
+                `  • Constitution │  ${character.constitution.toString().padStart(2)} ${getModifierString(character.constitution)}`,
+                `  • Intelligence │  ${character.intelligence.toString().padStart(2)} ${getModifierString(character.intelligence)}`,
+                `  • Wisdom       │  ${character.wisdom.toString().padStart(2)} ${getModifierString(character.wisdom)}`,
+                `  • Charisma     │  ${character.charisma.toString().padStart(2)} ${getModifierString(character.charisma)}\n`,
+                `💫 Derived Stats:`,
+                `  • Health       │  ${character.health}/${character.maxHealth}`,
+                `  • Mana         │  ${character.mana}/${character.maxMana}`,
+                `  • Armor Class  │  ${character.armorClass}`,
+                `  • Initiative   │  ${character.initiative}`,
+                `  • Speed        │  ${character.speed} ft\n`,
+                `🛡️ Proficiencies:`,
+                `  ${character.proficiencies.join('\n  ')}\n`,
+                `🗣️ Languages:`,
+                `  ${character.languages.join('\n  ')}\n`,
                 `\nYou can set your character's background story, appearance, and personality using:`,
-                `- /character background`,
-                `- /character appearance`,
-                `- /character personality`
+                `📝 /character_settings`
             ];
 
             // Send a new reply instead of updating the old interaction
@@ -695,4 +696,13 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
             });
         }
     }
+}
+
+function getModifierString(stat: number): string {
+    const modifier = Math.floor((stat - 10) / 2);
+    if (modifier === 0) return '';
+    const sign = modifier > 0 ? '+' : '';
+    return modifier > 0 
+        ? `\`\`\`diff\n+${modifier}\n\`\`\``  // Green for positive
+        : `\`\`\`diff\n${modifier}\n\`\`\``   // Red for negative
 } 

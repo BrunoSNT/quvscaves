@@ -91,8 +91,8 @@ export async function generateResponse(context: GameContext): Promise<string> {
 
 function validateResponseFormat(response: string, language: SupportedLanguage): boolean {
     const requiredSections = language === 'en-US' 
-        ? ['[Narration]', '[Dialogue]', '[Atmosphere]', '[Suggested Choices]', '[Effects]']
-        : ['[Narração]', '[Diálogo]', '[Atmosfera]', '[Sugestões de Ação]', '[Efeitos]'];
+        ? ['[Narration]', '[Dialogue]', '[Atmosphere]', '[Suggested Choices]', '[Effects]', '[Spell Effects]']
+        : ['[Narração]', '[Diálogo]', '[Atmosfera]', '[Sugestões de Ação]', '[Efeitos]', '[Efeitos Mágicos]'];
     
     return requiredSections.some(section => response.includes(section));
 }
@@ -127,7 +127,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        const character = adventure.players[0]?.character;
+        const character = adventure.players[0]?.character as unknown as Character;
         if (!character) {
             await interaction.reply({
                 content: getMessages(interaction.locale as SupportedLanguage).errors.characterNotFound,
@@ -147,7 +147,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         const context: GameContext = {
             scene: currentScene?.description || 'Starting a new adventure...',
             playerActions: [action],
-            characters: [character as Character],
+            characters: [character],
             currentState: gameState,
             language: (adventure.language as SupportedLanguage) || 'en-US'
         };
@@ -177,4 +177,29 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             ephemeral: true
         });
     }
+}
+
+function createLocalFallbackResponse(context: GameContext): string {
+    const language = context.language;
+    const isEnglish = language === 'en-US';
+    
+    logger.warn('Using fallback response for language:', language);
+
+    const sections = isEnglish ? {
+        narration: '[Narration] The adventure continues, though the path ahead is momentarily unclear...',
+        dialogue: '[Dialogue] "Let us proceed carefully," your companion suggests.',
+        atmosphere: '[Atmosphere] A moment of uncertainty hangs in the air.',
+        suggestions: '[Suggested Choices]\n- Wait and observe the situation\n- Proceed with caution\n- Consult with your companions',
+        effects: '[Effects] The group remains alert and ready.',
+        spellEffects: '[Spell Effects] No magical effects are currently active.'
+    } : {
+        narration: '[Narração] A aventura continua, embora o caminho à frente esteja momentaneamente incerto...',
+        dialogue: '[Diálogo] "Vamos prosseguir com cuidado," sugere seu companheiro.',
+        atmosphere: '[Atmosfera] Um momento de incerteza paira no ar.',
+        suggestions: '[Sugestões de Ação]\n- Aguardar e observar a situação\n- Prosseguir com cautela\n- Consultar seus companheiros',
+        effects: '[Efeitos] O grupo permanece alerta e pronto.',
+        spellEffects: '[Efeitos Mágicos] Nenhum efeito mágico está ativo no momento.'
+    };
+
+    return Object.values(sections).join('\n\n');
 } 
