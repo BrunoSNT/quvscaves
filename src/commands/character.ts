@@ -8,10 +8,11 @@ import {
     StringSelectMenuInteraction,
     ButtonInteraction,
     MessageActionRowComponentBuilder,
-    TextChannel
+    TextChannel,
+    AutocompleteInteraction
 } from 'discord.js';
 import { prisma } from '../lib/prisma';
-import { generateStats, getRacialBonuses, calculateHealth, getStartingProficiencies } from '../utils/dice';
+import { generateStats, getRacialBonuses, calculateHealth, getStartingProficiencies, calculateMana, calculateArmorClass, getRaceSpeed } from '../utils/dice';
 
 const RACES = ['Human', 'Elf', 'Dwarf', 'Halfling', 'Orc'];
 const CLASSES = ['Warrior', 'Mage', 'Rogue', 'Cleric', 'Ranger', 'Paladin'];
@@ -144,56 +145,121 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                                 .setDisabled(rerollsLeft <= 0 || !stats[statsOrder[currentStatIndex]])
                         );
 
+                    const confirmationRow = (rerollsLeft: number) => new ActionRowBuilder<MessageActionRowComponentBuilder>()
+                        .addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('confirm_stats')
+                                .setLabel('✅ Confirm Stats')
+                                .setStyle(1),
+                            new ButtonBuilder()
+                                .setCustomId('reroll_last')
+                                .setLabel(`↩️ Reroll Last (${rerollsLeft} left)`)
+                                .setStyle(2)
+                                .setDisabled(rerollsLeft <= 0),
+                            new ButtonBuilder()
+                                .setCustomId('reroll_all')
+                                .setLabel('🎲 Reroll All')
+                                .setStyle(2)
+                        );
+
                     let currentStatIndex = 0;
                     let rerollsRemaining = 3;
                     let currentRolls: number[] = [];
                     const stats: { [key: string]: number } = {};
+                    let confirmed = false;
 
                     await statsMethodInteraction.update({
                         content: `Rolling stats for **${name}**...\nClick "Roll Next Stat" to roll 4d6 (drop lowest) for ${statsOrder[0].toUpperCase()}\nYou have ${rerollsRemaining} rerolls available.`,
                         components: [rollStatsRow(rerollsRemaining)]
                     });
 
-                    while (currentStatIndex < statsOrder.length) {
-                        const rollInteraction = await raceMsg.awaitMessageComponent({
+                    while (!confirmed) {
+                        while (currentStatIndex < statsOrder.length) {
+                            const rollInteraction = await raceMsg.awaitMessageComponent({
+                                filter: i => i.user.id === interaction.user.id,
+                                time: 300000
+                            }) as ButtonInteraction;
+
+                            if (rollInteraction.customId === 'roll_stat') {
+                                const rolls = Array(4).fill(0).map(() => Math.floor(Math.random() * 6) + 1);
+                                rolls.sort((a, b) => b - a);
+                                const total = rolls.slice(0, 3).reduce((sum, num) => sum + num, 0);
+                                currentRolls = rolls;
+
+                                stats[statsOrder[currentStatIndex]] = total;
+                                
+                                const rollsDisplay = `[${rolls.join(', ')}] → ${total}`;
+                                const statsDisplay = statsOrder.map((stat, index) => {
+                                    if (index < currentStatIndex + 1) {
+                                        return `${stat.toUpperCase()}: ${stats[stat]}`;
+                                    }
+                                    return `${stat.toUpperCase()}: -`;
+                                }).join('\n');
+
+                                if (currentStatIndex < statsOrder.length - 1) {
+                                    await rollInteraction.update({
+                                        content: `Rolling stats for **${name}**...\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\n\nClick "Roll Next Stat" for ${statsOrder[currentStatIndex + 1].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
+                                        components: [rollStatsRow(rerollsRemaining)]
+                                    });
+                                } else {
+                                    // Show confirmation buttons after rolling all stats
+                                    const total = Object.values(stats).reduce((sum, val) => sum + val, 0);
+                                    await rollInteraction.update({
+                                        content: `Stats rolled for **${name}**!\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\nTotal: ${total}\n\nWould you like to keep these stats or reroll?`,
+                                        components: [confirmationRow(rerollsRemaining)]
+                                    });
+                                }
+                                currentStatIndex++;
+                            } else if (rollInteraction.customId === 'reroll' && currentStatIndex > 0 && rerollsRemaining > 0) {
+                                currentStatIndex--;
+                                rerollsRemaining--;
+                                await rollInteraction.update({
+                                    content: `Rolling stats for **${name}**...\nRerolling ${statsOrder[currentStatIndex].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
+                                    components: [rollStatsRow(rerollsRemaining)]
+                                });
+                            }
+                        }
+
+                        // Wait for confirmation or reroll
+                        const confirmInteraction = await raceMsg.awaitMessageComponent({
                             filter: i => i.user.id === interaction.user.id,
                             time: 300000
                         }) as ButtonInteraction;
 
-                        if (rollInteraction.customId === 'roll_stat') {
+                        if (confirmInteraction.customId === 'confirm_stats') {
+                            finalStats = stats;
+                            confirmed = true;
+                            await confirmInteraction.update({
+                                content: `Stats confirmed for **${name}**!\n\n${statsOrder.map(stat => `${stat.toUpperCase()}: ${stats[stat]}`).join('\n')}`,
+                                components: []
+                            });
+                        } else if (confirmInteraction.customId === 'reroll_last' && rerollsRemaining > 0) {
+                            // Reroll just the last stat (charisma)
+                            currentStatIndex--;
+                            rerollsRemaining--;
                             const rolls = Array(4).fill(0).map(() => Math.floor(Math.random() * 6) + 1);
                             rolls.sort((a, b) => b - a);
                             const total = rolls.slice(0, 3).reduce((sum, num) => sum + num, 0);
-                            currentRolls = rolls;
-
                             stats[statsOrder[currentStatIndex]] = total;
                             
                             const rollsDisplay = `[${rolls.join(', ')}] → ${total}`;
                             const statsDisplay = statsOrder.map((stat, index) => {
-                                if (index < currentStatIndex + 1) {
-                                    return `${stat.toUpperCase()}: ${stats[stat]}`;
-                                }
-                                return `${stat.toUpperCase()}: -`;
+                                return `${stat.toUpperCase()}: ${stats[stat] || '-'}`;
                             }).join('\n');
-
-                            if (currentStatIndex < statsOrder.length - 1) {
-                                await rollInteraction.update({
-                                    content: `Rolling stats for **${name}**...\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\n\nClick "Roll Next Stat" for ${statsOrder[currentStatIndex + 1].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
-                                    components: [rollStatsRow(rerollsRemaining)]
-                                });
-                            } else {
-                                finalStats = stats;
-                                await rollInteraction.update({
-                                    content: `Stats rolled for **${name}**!\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}`,
-                                    components: []
-                                });
-                            }
+                            
+                            const allStatsTotal = Object.values(stats).reduce((sum, val) => sum + val, 0);
+                            await confirmInteraction.update({
+                                content: `Stats rolled for **${name}**!\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\nTotal: ${allStatsTotal}\n\nWould you like to keep these stats or reroll?`,
+                                components: [confirmationRow(rerollsRemaining)]
+                            });
                             currentStatIndex++;
-                        } else if (rollInteraction.customId === 'reroll' && currentStatIndex > 0 && rerollsRemaining > 0) {
-                            currentStatIndex--;
-                            rerollsRemaining--;
-                            await rollInteraction.update({
-                                content: `Rolling stats for **${name}**...\nRerolling ${statsOrder[currentStatIndex].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
+                        } else if (confirmInteraction.customId === 'reroll_all') {
+                            // Reset everything for a fresh start
+                            currentStatIndex = 0;
+                            rerollsRemaining = 3;
+                            Object.keys(stats).forEach(key => delete stats[key]);
+                            await confirmInteraction.update({
+                                content: `Rolling new stats for **${name}**...\nClick "Roll Next Stat" to roll 4d6 (drop lowest) for ${statsOrder[0].toUpperCase()}\nYou have ${rerollsRemaining} rerolls available.`,
                                 components: [rollStatsRow(rerollsRemaining)]
                             });
                         }
@@ -387,32 +453,79 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
 
             // Calculate derived stats
             const maxHealth = calculateHealth(1, statsWithBonuses.constitution, characterClass);
+            const maxMana = calculateMana(1, statsWithBonuses.intelligence, statsWithBonuses.wisdom, characterClass);
             const proficiencies = getStartingProficiencies(characterClass);
+            const armorClass = calculateArmorClass(statsWithBonuses.dexterity, characterClass);
+            const initiative = Math.floor((statsWithBonuses.dexterity - 10) / 2);
+            const speed = getRaceSpeed(race);
 
-            // Create character
-            const character = await prisma.character.create({
-                data: {
+            // Step 4: Background Information
+            const backgroundRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
+                .addComponents(
+                    new StringSelectMenuBuilder()
+                        .setCustomId('alignment_select')
+                        .setPlaceholder('Choose your alignment')
+                        .addOptions([
+                            { label: 'Lawful Good', value: 'lawful_good' },
+                            { label: 'Neutral Good', value: 'neutral_good' },
+                            { label: 'Chaotic Good', value: 'chaotic_good' },
+                            { label: 'Lawful Neutral', value: 'lawful_neutral' },
+                            { label: 'True Neutral', value: 'true_neutral' },
+                            { label: 'Chaotic Neutral', value: 'chaotic_neutral' },
+                            { label: 'Lawful Evil', value: 'lawful_evil' },
+                            { label: 'Neutral Evil', value: 'neutral_evil' },
+                            { label: 'Chaotic Evil', value: 'chaotic_evil' }
+                        ])
+                );
+
+            await raceMsg.edit({
+                content: `Almost done with **${name}**! Choose your alignment:`,
+                components: [backgroundRow]
+            });
+
+            const alignmentInteraction = await raceMsg.awaitMessageComponent({
+                filter: i => i.user.id === interaction.user.id,
+                time: 300000
+            }) as StringSelectMenuInteraction;
+
+            const alignment = alignmentInteraction.values[0].replace('_', ' ');
+
+            // Create character with all fields
+        const character = await prisma.character.create({
+            data: {
                     name,
                     race,
-                    class: characterClass,
+                class: characterClass,
+                    level: 1,
+                    experience: 0,
                     strength: statsWithBonuses.strength,
                     dexterity: statsWithBonuses.dexterity,
                     constitution: statsWithBonuses.constitution,
                     intelligence: statsWithBonuses.intelligence,
                     wisdom: statsWithBonuses.wisdom,
                     charisma: statsWithBonuses.charisma,
-                    maxHealth,
                     health: maxHealth,
+                    maxHealth,
+                    mana: maxMana,
+                    maxMana,
+                    background: '',  // Can be updated later with /character background
+                    appearance: '',  // Can be updated later with /character appearance
+                    personality: '', // Can be updated later with /character personality
+                    alignment,
+                    armorClass,
+                    initiative,
+                    speed,
                     proficiencies,
                     languages: racialBonuses.languages,
-                    userId: user.id
-                }
-            });
+                userId: user.id
+            }
+        });
 
-            // Final response
+            // Final response with all stats
             const response = [
                 `✨ Character created successfully! ✨\n`,
-                `**${character.name}** - Level 1 ${character.race} ${character.class}`,
+                `**${character.name}** - Level ${character.level} ${character.race} ${character.class}`,
+                `Alignment: ${character.alignment}`,
                 `\nBase Stats:`,
                 `- Strength: ${character.strength}`,
                 `- Dexterity: ${character.dexterity}`,
@@ -421,13 +534,21 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                 `- Wisdom: ${character.wisdom}`,
                 `- Charisma: ${character.charisma}`,
                 `\nDerived Stats:`,
-                `- Max Health: ${character.maxHealth}`,
+                `- Health: ${character.health}/${character.maxHealth}`,
+                `- Mana: ${character.mana}/${character.maxMana}`,
+                `- Armor Class: ${character.armorClass}`,
+                `- Initiative: ${character.initiative}`,
+                `- Speed: ${character.speed} ft`,
                 `\nProficiencies: ${character.proficiencies.join(', ')}`,
-                `Languages: ${character.languages.join(', ')}`
+                `Languages: ${character.languages.join(', ')}`,
+                `\nYou can set your character's background story, appearance, and personality using:`,
+                `- /character background`,
+                `- /character appearance`,
+                `- /character personality`
             ];
 
             // Send a new reply instead of updating the old interaction
-            await interaction.editReply({
+        await interaction.editReply({
                 content: response.join('\n'),
                 components: []
             });
@@ -445,5 +566,133 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
             content: 'Failed to create character. Please try again.',
             components: []
         });
+    }
+}
+
+export async function handleCharacterSetting(interaction: ChatInputCommandInteraction) {
+    try {
+        // Get user
+        const user = await prisma.user.findUnique({
+            where: { discordId: interaction.user.id }
+        });
+
+        if (!user) {
+            await interaction.reply({
+                content: 'Please register first using `/register`',
+                ephemeral: true
+            });
+            return;
+        }
+
+        const characterId = interaction.options.getString('character_id', true);
+
+        // Verify character ownership
+        const character = await prisma.character.findFirst({
+            where: {
+                id: characterId,
+                userId: user.id
+            }
+        });
+
+        if (!character) {
+            await interaction.reply({
+                content: 'Character not found or you do not have permission to modify it.',
+                ephemeral: true
+            });
+            return;
+        }
+
+        // Show setting type selection menu
+        const settingRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
+            .addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId('setting_type')
+                    .setPlaceholder('Choose what to edit')
+                    .addOptions([
+                        { 
+                            label: 'Background Story',
+                            value: 'background',
+                            description: 'Your character\'s history and backstory'
+                        },
+                        { 
+                            label: 'Appearance',
+                            value: 'appearance',
+                            description: 'How your character looks'
+                        },
+                        { 
+                            label: 'Personality',
+                            value: 'personality',
+                            description: 'Your character\'s traits and behavior'
+                        }
+                    ])
+            );
+
+        const initialMessage = await interaction.reply({
+            content: `Editing **${character.name}** (Level ${character.level} ${character.race} ${character.class})\n\nCurrent settings:\nBackground: ${character.background || '(Not set)'}\nAppearance: ${character.appearance || '(Not set)'}\nPersonality: ${character.personality || '(Not set)'}`,
+            components: [settingRow],
+            ephemeral: true
+        });
+
+        // Wait for setting type selection
+        const settingInteraction = await initialMessage.awaitMessageComponent({
+            filter: i => i.user.id === interaction.user.id,
+            time: 300000
+        }) as StringSelectMenuInteraction;
+
+        const settingType = settingInteraction.values[0];
+        const settingTypeFormatted = settingType.charAt(0).toUpperCase() + settingType.slice(1);
+
+        // Show text input prompt
+        await settingInteraction.update({
+            content: `Editing **${settingTypeFormatted}** for ${character.name}\n\nCurrent value:\n${character[settingType as keyof typeof character] || '(Not set)'}\n\nPlease type your new ${settingTypeFormatted.toLowerCase()} below:`,
+            components: []
+        });
+
+        // Create a message collector for the next message
+        const filter = (m: Message) => m.author.id === interaction.user.id;
+        const collector = (interaction.channel as TextChannel).createMessageCollector({ filter, time: 300000, max: 1 });
+
+        collector.on('collect', async (m: Message) => {
+            // Delete user's message to keep things clean
+            await m.delete().catch(() => {});
+
+            // Update the character setting
+            const updateData: any = {};
+            updateData[settingType] = m.content;
+
+            const updatedCharacter = await prisma.character.update({
+                where: { id: characterId },
+                data: updateData
+            });
+
+            // Show confirmation
+            await settingInteraction.editReply({
+                content: `✨ ${settingTypeFormatted} updated for **${updatedCharacter.name}**!\n\n${settingTypeFormatted}:\n${m.content}`,
+                components: []
+            });
+        });
+
+        collector.on('end', async (collected) => {
+            if (collected.size === 0) {
+                await settingInteraction.editReply({
+                    content: 'Setting update timed out. Please try again.',
+                    components: []
+                });
+            }
+        });
+
+    } catch (error) {
+        console.error('Error updating character setting:', error);
+        if (!interaction.replied) {
+            await interaction.reply({
+                content: 'Failed to update character setting. Please try again.',
+                ephemeral: true
+            });
+        } else {
+            await interaction.followUp({
+                content: 'Failed to update character setting. Please try again.',
+                ephemeral: true
+            });
+        }
     }
 } 

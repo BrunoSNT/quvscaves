@@ -9,7 +9,7 @@ import {
 import { handleRegister } from './commands/register';
 import { handleHelp } from './commands/help';
 import { handleLinkWallet } from './commands/wallet';
-import { handleCreateCharacter } from './commands/character';
+import { handleCreateCharacter, handleCharacterSetting } from './commands/character';
 import { handleStartAdventure } from './commands/adventure';
 import { handleListCharacters, handleListAdventures } from './commands/list';
 import { handleDeleteCharacter, handleDeleteAdventure } from './commands/delete';
@@ -207,6 +207,15 @@ const commands = [
     new SlashCommandBuilder()
         .setName('disconnect_voice')
         .setDescription('Disconnect the bot from voice channel'),
+    new SlashCommandBuilder()
+        .setName('character_setting')
+        .setDescription('Change character settings')
+        .addStringOption(option =>
+            option.setName('character_id')
+                .setDescription('The character to modify')
+                .setRequired(true)
+                .setAutocomplete(true)
+        )
 ].map(command => command.toJSON());
 
 // Schedule cleanup every 6 hours
@@ -487,6 +496,26 @@ client.on(Events.InteractionCreate, async interaction => {
                         }))
                 );
             }
+            else if (interaction.commandName === 'character_setting') {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: interaction.user.id },
+                    include: {
+                        characters: true
+                    }
+                });
+
+                if (!user) return;
+
+                const focusedValue = interaction.options.getFocused().toLowerCase();
+                await interaction.respond(
+                    user.characters
+                        .filter(char => char.name.toLowerCase().includes(focusedValue))
+                        .map(char => ({
+                            name: `${char.name} (${char.class}) - Level ${char.level}`,
+                            value: char.id
+                        }))
+                );
+            }
         } catch (error) {
             console.error('Error in autocomplete:', error);
             await interaction.respond([]);
@@ -550,6 +579,9 @@ client.on(Events.InteractionCreate, async interaction => {
                 break;
             case 'disconnect_voice':
                 await handleDisconnectVoice(interaction);
+                break;
+            case 'character_setting':
+                await handleCharacterSetting(interaction);
                 break;
             default:
                 // Handle unknown command

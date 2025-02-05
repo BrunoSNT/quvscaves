@@ -154,4 +154,54 @@ export function getStartingProficiencies(characterClass: string): string[] {
         default:
             return ['Simple Weapons'];
     }
+}
+
+type CharacterClass = 'mage' | 'cleric' | 'ranger' | 'paladin' | 'warrior' | 'rogue';
+type Race = 'human' | 'elf' | 'dwarf' | 'halfling' | 'orc';
+
+export function calculateMana(level: number, intelligence: number, wisdom: number, characterClass: string): number {
+    const baseStats: Record<CharacterClass, number> = {
+        mage: 100,
+        cleric: 80,
+        ranger: 50,
+        paladin: 60,
+        warrior: 20,
+        rogue: 30
+    };
+
+    const intMod = Math.floor((intelligence - 10) / 2);
+    const wisMod = Math.floor((wisdom - 10) / 2);
+    
+    const base = baseStats[characterClass.toLowerCase() as CharacterClass] || 50;
+    const perLevel = characterClass.toLowerCase() === 'mage' ? 20 : 10;
+    
+    return base + (perLevel * (level - 1)) + (intMod * 5) + (wisMod * 5);
+}
+
+export function calculateArmorClass(dexterity: number, characterClass: string): number {
+    const baseAC = 10;
+    const dexMod = Math.floor((dexterity - 10) / 2);
+    
+    const classBonus: Record<CharacterClass, number> = {
+        warrior: 2,
+        paladin: 2,
+        cleric: 1,
+        ranger: 1,
+        rogue: 0,
+        mage: 0
+    };
+    
+    return baseAC + dexMod + (classBonus[characterClass.toLowerCase() as CharacterClass] || 0);
+}
+
+export function getRaceSpeed(race: string): number {
+    const speeds: Record<Race, number> = {
+        human: 30,
+        elf: 35,
+        dwarf: 25,
+        halfling: 25,
+        orc: 35
+    };
+    
+    return speeds[race.toLowerCase() as Race] || 30;
 } 
