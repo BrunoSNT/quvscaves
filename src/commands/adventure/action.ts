@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, TextChannel, DMChannel, NewsChannel, ThreadChannel, BaseGuildTextChannel } from 'discord.js';
+import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, TextChannel, DMChannel, NewsChannel, ThreadChannel, BaseGuildTextChannel, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder } from 'discord.js';
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
@@ -272,6 +272,44 @@ async function updateAdventureMemory(adventureId: string, aiResponse: string) {
     } catch (error) {
         logger.error('Error updating adventure memory:', error);
     }
+}
+
+function extractSuggestedActions(response: string, language: SupportedLanguage): string[] {
+    const actionSection = language === 'pt-BR' 
+        ? /\[(?:Sugestões de Ação|Ações Disponíveis|Ações)\](.*?)(?=\[|$)/s
+        : /\[(?:Available Actions|Actions|Suggested Actions)\](.*?)(?=\[|$)/s;
+
+    const match = response.match(actionSection);
+    if (!match) return [];
+
+    return match[1]
+        .split('\n')
+        .filter(line => line.trim().startsWith('-'))
+        .map(line => line.trim().replace(/^-\s*/, ''))
+        .filter(action => action.length > 0);
+}
+
+function createActionButtons(actions: string[]): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
+    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+    
+    // Create buttons in groups of 5 (Discord's limit per row)
+    for (let i = 0; i < actions.length; i += 5) {
+        const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
+        const groupActions = actions.slice(i, i + 5);
+        
+        groupActions.forEach((action, index) => {
+            row.addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`action_${i + index}`)
+                    .setLabel(action.length > 80 ? action.substring(0, 77) + '...' : action)
+                    .setStyle(ButtonStyle.Primary)
+            );
+        });
+        
+        rows.push(row);
+    }
+    
+    return rows;
 }
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
@@ -675,6 +713,73 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                     await updateCharacterSheet(userCharacter, characterChannel, statusEffects);
                 }
             }
+        }
+
+        // Extract suggested actions and create buttons
+        const suggestedActions = extractSuggestedActions(response, context.language);
+        const actionButtons = createActionButtons(suggestedActions);
+
+        // Send the response with action buttons
+        const responseMessage = await interaction.reply({
+            content: response,
+            components: actionButtons,
+            ephemeral: false,
+            fetchReply: true
+        });
+
+        // Add button collector
+        const collector = responseMessage.createMessageComponentCollector({ 
+            time: 15 * 60 * 1000 // 15 minutes
+        });
+
+        collector.on('collect', async i => {
+            try {
+                // Get the selected action
+                const actionIndex = parseInt(i.customId.replace('action_', ''));
+                const selectedAction = suggestedActions[actionIndex];
+
+                // Create a new action interaction
+                const actionInteraction = {
+                    ...i,
+                    commandName: 'action',
+                    options: {
+                        getString: (name: string) => {
+                            if (name === 'description') return selectedAction;
+                            if (name === 'adventureId') return userAdventure.id;
+                            return null;
+                        }
+                    }
+                };
+
+                // Handle the action
+                await handlePlayerAction(actionInteraction as any);
+
+                // Remove buttons from the original message
+                await responseMessage.edit({
+                    components: []
+                });
+
+            } catch (error) {
+                logger.error('Error handling action button:', error);
+                await i.reply({
+                    content: context.language === 'pt-BR'
+                        ? 'Erro ao processar a ação. Por favor, tente novamente usando o comando `/action`.'
+                        : 'Error processing action. Please try again using the `/action` command.',
+                    ephemeral: true
+                });
+            }
+        });
+
+        // Voice playback if enabled
+        if (userAdventure.categoryId) {
+            await speakInVoiceChannel(
+                response,
+                interaction.guild!,
+                userAdventure.categoryId,
+                userAdventure.id
+            ).catch(error => {
+                logger.error('Error in voice playback:', error);
+            });
         }
 
         // Update the deferred reply

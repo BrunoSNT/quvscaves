@@ -1,6 +1,6 @@
 export type SupportedLanguage = 'en-US' | 'pt-BR';
 export type VoiceType = 'discord' | 'elevenlabs' | 'text_only';
-export type CharacterClass = 'warrior' | 'mage' | 'rogue';
+export type CharacterClass = 'warrior' | 'mage' | 'rogue' | 'ranger' | 'paladin';
 export type AdventureStatus = 'ACTIVE' | 'PAUSED' | 'FINISHED';
 export type FriendshipStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 export type AdventurePrivacy = 'public' | 'friends_only' | 'private';

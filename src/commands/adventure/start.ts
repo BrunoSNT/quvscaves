@@ -424,14 +424,18 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             });
 
             // Create adventure players
-            await Promise.all(characters.map(character => 
-                prisma.adventurePlayer.create({
+            await Promise.all(characters.map(async character => {
+                await prisma.adventurePlayer.create({
                     data: {
                         adventureId: adventure.id,
                         characterId: character.id
                     }
-                })
-            ));
+                });
+                
+                // Set up character abilities and proficiencies
+                const { setupCharacterForAdventure } = await import('../../utils/characterSetup');
+                await setupCharacterForAdventure(character.id, adventure.id);
+            }));
 
             // Set up permissions
             const allUsers = [...characters.map((c: Character) => c.user.discordId), user.discordId];
@@ -474,25 +478,24 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
             collector.on('collect', async i => {
                 try {
+                    // First defer the reply
+                    await i.deferReply({ ephemeral: true });
+
                     // Get the character of the user who clicked
                     const userCharacter = characters.find(c => c.user.discordId === i.user.id);
                     if (!userCharacter) {
-                        await i.reply({ 
+                        await i.editReply({ 
                             content: language === 'pt-BR' 
                                 ? 'Você não tem um personagem nesta aventura.'
-                                : 'You don\'t have a character in this adventure.',
-                            ephemeral: true 
+                                : 'You don\'t have a character in this adventure.'
                         });
                         return;
                     }
 
-                    // Trigger default action
+                    // Default action based on language
                     const defaultAction = language === 'pt-BR'
-                        ? `Eu observo atentamente o ambiente ao meu redor, tentando absorver cada detalhe deste novo começo.`
-                        : `I carefully observe my surroundings, taking in every detail of this new beginning.`;
-
-                    // First defer the reply
-                    await i.deferReply({ ephemeral: true });
+                        ? 'Eu observo atentamente o ambiente ao meu redor, tentando absorver cada detalhe deste novo começo.'
+                        : 'I carefully observe my surroundings, taking in every detail of this new beginning.';
 
                     try {
                         // Import and call handlePlayerAction
@@ -501,7 +504,11 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                             ...i,
                             commandName: 'action',
                             options: {
-                                getString: (name: string) => name === 'description' ? defaultAction : null
+                                getString: (name: string) => {
+                                    if (name === 'description') return defaultAction;
+                                    if (name === 'adventureId') return adventure.id;
+                                    return null;
+                                }
                             },
                             user: i.user,
                             guild: i.guild,
@@ -524,6 +531,13 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                                 ? '✨ Aventura iniciada! Sua jornada começa...'
                                 : '✨ Adventure started! Your journey begins...'
                         });
+
+                        // Remove the button after successful use
+                        const originalMessage = await i.message.fetch();
+                        if (originalMessage.components.length > 0) {
+                            await originalMessage.edit({ components: [] });
+                        }
+
                     } catch (error) {
                         logger.error('Error executing default action:', error);
                         await i.editReply({ 
@@ -535,12 +549,20 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                 } catch (error) {
                     logger.error('Error in collector:', error);
                     try {
-                        await i.reply({
-                            content: language === 'pt-BR'
-                                ? 'Erro ao processar a ação. Por favor, tente novamente.'
-                                : 'Error processing action. Please try again.',
-                            ephemeral: true
-                        });
+                        if (i.deferred) {
+                            await i.editReply({
+                                content: language === 'pt-BR'
+                                    ? 'Erro ao processar a ação. Por favor, tente novamente.'
+                                    : 'Error processing action. Please try again.'
+                            });
+                        } else {
+                            await i.reply({
+                                content: language === 'pt-BR'
+                                    ? 'Erro ao processar a ação. Por favor, tente novamente.'
+                                    : 'Error processing action. Please try again.',
+                                ephemeral: true
+                            });
+                        }
                     } catch (replyError) {
                         logger.error('Error sending error message:', replyError);
                     }

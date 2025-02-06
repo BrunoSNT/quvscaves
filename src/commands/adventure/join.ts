@@ -107,6 +107,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
         }
 
         // Create the adventure player record first
+        let updatedCharacter = character;
         try {
             await prisma.adventurePlayer.create({
                 data: {
@@ -114,6 +115,26 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                     characterId: character.id
                 }
             });
+
+            // Set up character abilities and proficiencies
+            const { setupCharacterForAdventure } = await import('../../utils/characterSetup');
+            await setupCharacterForAdventure(character.id, adventure.id);
+
+            // Refresh character data after setup
+            const refreshedCharacter = await prisma.character.findUnique({
+                where: { id: character.id },
+                include: {
+                    spells: true,
+                    abilities: true,
+                    inventory: true
+                }
+            });
+
+            if (!refreshedCharacter) {
+                throw new Error('Failed to fetch updated character data');
+            }
+
+            updatedCharacter = refreshedCharacter;
         } catch (error) {
             logger.error('Error creating adventure player:', error);
             await interaction.editReply({
@@ -126,7 +147,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
         if (interaction.guild) {
             try {
                 const characterChannel = await interaction.guild.channels.create({
-                    name: `${character.name.toLowerCase().replace(/\s+/g, '-')}`,
+                    name: `${updatedCharacter.name.toLowerCase().replace(/\s+/g, '-')}`,
                     type: 0, // GuildText = 0
                     parent: adventure.categoryId || undefined,
                     permissionOverwrites: [
@@ -195,12 +216,12 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                 } else {
                     // Send a single welcome message
                     await adventureLogChannel.send(
-                        getMessages(interaction.locale as SupportedLanguage).welcome.newPlayer(character.name)
+                        getMessages(interaction.locale as SupportedLanguage).welcome.newPlayer(updatedCharacter.name)
                     );
                 }
 
-                // Create/update character sheet
-                await updateCharacterSheet(character, characterChannel);
+                // Create/update character sheet with the updated character data
+                await updateCharacterSheet(updatedCharacter, characterChannel);
 
                 // Only move to voice channel if adventure is not text_only
                 if (adventure.voiceType !== 'text_only') {
@@ -245,7 +266,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                 await interaction.editReply({
                     content: getMessages(interaction.locale as SupportedLanguage).success.adventureJoined(
                         adventure.name,
-                        character.name
+                        updatedCharacter.name
                     )
                 });
             } catch (error) {
@@ -257,7 +278,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
                     } : error,
                     guildId: interaction.guild.id,
                     categoryId: adventure.categoryId,
-                    characterName: character.name,
+                    characterName: updatedCharacter.name,
                     adventureName: adventure.name
                 });
                 await interaction.editReply({
@@ -268,7 +289,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
             await interaction.editReply({
                 content: getMessages(interaction.locale as SupportedLanguage).success.adventureJoined(
                     adventure.name,
-                    character.name
+                    updatedCharacter.name
                 )
             });
         }

@@ -6,6 +6,7 @@ import { getMessages } from '../utils/language';
 import { GameContext, GameState, Character, SupportedLanguage } from '../types/game';
 import { logger } from '../utils/logger';
 import { getGamePrompt, buildContextString, createFallbackResponse } from '../utils/gamePrompts';
+import chalk from 'chalk';
 
 const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
 const AI_MODEL = process.env.AI_MODEL || 'qwen2.5:14b';
@@ -15,40 +16,75 @@ interface AIResponse {
     error?: string;
 }
 
+function formatContext(context: GameContext): string {
+    return `
+${chalk.cyan('Adventure Settings:')}
+${chalk.gray('Style:')} ${chalk.magenta(context.adventureSettings.worldStyle)}
+${chalk.gray('Tone:')} ${chalk.magenta(context.adventureSettings.toneStyle)}
+${chalk.gray('Magic Level:')} ${chalk.magenta(context.adventureSettings.magicLevel)}
+${context.adventureSettings.setting ? `${chalk.gray('Setting:')} ${chalk.magenta(context.adventureSettings.setting)}` : ''}
+
+${chalk.cyan('Current Scene:')}
+${chalk.gray(context.scene)}
+
+${chalk.cyan('Characters:')}
+${context.characters.map(char => `${chalk.yellow(char.name)} (${chalk.gray(char.class)} Lvl ${chalk.yellow(char.level)})
+  ${chalk.gray('Stats:')} STR:${char.strength} DEX:${char.dexterity} CON:${char.constitution} INT:${char.intelligence} WIS:${char.wisdom} CHA:${char.charisma}
+  ${chalk.gray('Proficiencies:')} ${char.proficiencies?.length ? char.proficiencies.join(', ') : 'None'}
+  ${chalk.gray('Languages:')} ${char.languages?.length ? char.languages.join(', ') : 'None'}
+  ${chalk.gray('Spells:')} ${char.spells?.length ? char.spells.map(s => s.name).join(', ') : 'None'}
+  ${chalk.gray('Abilities:')} ${char.abilities?.length ? char.abilities.map(a => a.name).join(', ') : 'None'}`).join('\n')}
+
+${chalk.cyan('Player State:')}
+${chalk.red('❤️ Health:')} ${context.currentState.health}
+${chalk.blue('🔮 Mana:')} ${context.currentState.mana}
+${chalk.gray('🎒 Inventory:')} ${context.currentState.inventory.length ? context.currentState.inventory.join(', ') : 'Empty'}
+${chalk.gray('Quest Progress:')} ${context.currentState.questProgress}
+
+${chalk.cyan('Memory:')}
+${chalk.yellow('Recent Scenes:')}
+${context.memory.recentScenes.map(scene => chalk.gray(`- ${scene.summary}`)).join('\n') || chalk.gray('None')}
+
+${chalk.yellow('Active Quests:')}
+${context.memory.activeQuests.map(quest => chalk.gray(`- ${quest.title}: ${quest.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.yellow('Known Characters:')}
+${context.memory.knownCharacters.map(char => chalk.gray(`- ${char.title}: ${char.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.yellow('Discovered Locations:')}
+${context.memory.discoveredLocations.map(loc => chalk.gray(`- ${loc.title}: ${loc.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.yellow('Important Items:')}
+${context.memory.importantItems.map(item => chalk.gray(`- ${item.title}: ${item.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.cyan('Combat Status:')} ${context.combat ? chalk.yellow('Active') : chalk.gray('None')}
+${context.combat ? `Round: ${chalk.yellow(context.combat.round)}
+Current Turn: ${chalk.yellow(context.combat.currentTurn)}
+Participants:
+${context.combat.participants.map(p => chalk.gray(`- ${p.id} (Initiative: ${p.initiative}, Health: ${p.health}/${p.maxHealth})
+  Status Effects: ${p.statusEffects.join(', ') || 'None'}`)).join('\n')}` : ''}
+
+${chalk.cyan('Recent Action:')} ${chalk.yellow(context.playerActions[0])}
+${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
+`;
+}
+
 export async function generateResponse(context: GameContext): Promise<string> {
     try {
         const language = context.language;
         const prompt = getGamePrompt(language);
         const contextStr = buildContextString(context, language);
 
-        logger.debug('Full context for AI:', {
-            prompt: prompt.intro,
-            context: contextStr,
-            combat: context.combat ? {
-                isActive: context.combat.isActive,
-                round: context.combat.round,
-                currentTurn: context.combat.currentTurn,
-                participants: context.combat.participants
-            } : 'No combat active'
-        });
+        logger.debug(chalk.cyan('Generating AI response...'));
+        logger.debug(chalk.gray('Context:'), formatContext(context));
 
-        logger.debug('Sending request to AI endpoint:', {
+        logger.debug(chalk.cyan('Sending request to AI:'), {
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
-            language,
-            contextLength: contextStr.length
+            language: language
         });
 
         const systemPrompt = `${prompt.system}
-
-SECTION FORMAT:
-All sections MUST be formatted with square brackets, like this:
-[Narration] - NOT **Narration**
-[Atmosphere] - NOT **Atmosphere**
-[Combat] - NOT **Combat**
-[Available Actions] - NOT **Actions**
-[Effects] - NOT **Effects**
-[Memory] - NOT **Memory**
 
 # Tools
 
@@ -108,9 +144,9 @@ ${contextStr}
             return createFallbackResponse(context);
         }
 
-        logger.debug('Processed AI response:', {
-            responseLength: aiResponse.length,
-            firstLine: aiResponse.split('\n')[0]
+        logger.debug(chalk.green('Response received:'), {
+            length: aiResponse.length,
+            preview: aiResponse.substring(0, 100)
         });
 
         // Handle tool calls in the response
@@ -119,11 +155,12 @@ ${contextStr}
             for (const toolCall of toolCalls) {
                 try {
                     const toolData = JSON.parse(toolCall.replace(/<\/?tool_call>/g, ''));
-                    logger.debug('Processing tool call:', toolData);
-                    // TODO: Implement tool call handling
-                    // await handleToolCall(toolData, context);
+                    logger.debug(chalk.cyan('Tool Call:'), {
+                        name: toolData.name,
+                        args: JSON.stringify(toolData.arguments)
+                    });
                 } catch (error) {
-                    logger.error('Error processing tool call:', error);
+                    logger.error(chalk.red('Tool Call Error:'), error);
                 }
             }
         }
@@ -140,25 +177,23 @@ ${contextStr}
 
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            logger.error('Axios error generating AI response:', {
+            logger.error(chalk.red('API Error:'), {
                 status: error.response?.status,
-                statusText: error.response?.statusText,
-                data: error.response?.data,
-                message: error.message
+                message: error.message,
+                data: JSON.stringify(error.response?.data)
             });
         } else {
-            logger.error('Error generating AI response:', error);
+            logger.error(chalk.red('Error:'), error);
         }
         return createFallbackResponse(context);
     }
 }
 
 function validateResponseFormat(response: string, language: SupportedLanguage): boolean {
-    const sectionNames = language === 'en-US' 
+    const requiredSections = language === 'en-US' 
         ? {
             narration: ['Narration', 'Narrative'],
             atmosphere: ['Atmosphere', 'Environment'],
-            combat: ['Combat', 'Battle'],
             actions: ['Available Actions', 'Actions', 'Suggested Actions', 'Choices'],
             effects: ['Effects', 'Status Effects'],
             memory: ['Memory', 'History']
@@ -166,41 +201,83 @@ function validateResponseFormat(response: string, language: SupportedLanguage): 
         : {
             narration: ['Narração', 'Narrativa'],
             atmosphere: ['Atmosfera', 'Ambiente'],
-            combat: ['Combate', 'Batalha'],
             actions: ['Ações Disponíveis', 'Sugestões de Ação', 'Ações', 'Escolhas'],
             effects: ['Efeitos', 'Status'],
             memory: ['Memória', 'História']
         };
     
-    // Create patterns for sections
-    const patterns = Object.values(sectionNames).flat().map(name => 
-        `\\[${name}\\]`  // Only accept bracket format
-    );
+    // Create patterns for required sections
+    const patterns = Object.entries(requiredSections).map(([type, names]) => ({
+        type,
+        patterns: names.map(name => `\\[${name}\\]([^\\[]*?)(?=\\[|$)`)
+    }));
 
-    // Get unique section types present (ignoring duplicates)
-    const uniqueSectionTypes = new Set(
-        patterns
-            .map(pattern => {
-                const matches = response.match(new RegExp(pattern, 'gi'));
-                return matches ? pattern : null;
-            })
-            .filter(Boolean)
-    );
-
-    const minimumSectionsRequired = 2; // Reduced from 3 to be more lenient
-
-    logger.debug('Response format validation:', {
-        language,
-        uniqueSectionTypes: uniqueSectionTypes.size,
-        requiredMinimum: minimumSectionsRequired,
-        foundSections: Array.from(uniqueSectionTypes),
-        responsePreview: response.substring(0, 100)
+    // Check each section type and its content
+    const foundSections = patterns.map(({ type, patterns }) => {
+        // Try each possible pattern for this section type
+        for (const pattern of patterns) {
+            const match = response.match(new RegExp(pattern, 'i'));
+            if (match) {
+                // Check if section has actual content (not just whitespace)
+                const content = match[1]?.trim();
+                // For actions section, verify it has bullet points
+                if (type === 'actions' && content) {
+                    const hasChoices = content.split('\n')
+                        .some(line => line.trim().startsWith('-'));
+                    return { 
+                        type, 
+                        found: true,
+                        hasContent: hasChoices,
+                        content
+                    };
+                }
+                return { 
+                    type, 
+                    found: true,
+                    hasContent: !!content,
+                    content
+                };
+            }
+        }
+        return { 
+            type, 
+            found: false,
+            hasContent: false,
+            content: null 
+        };
     });
 
-    // Basic format check - must have at least some section formatting
+    // Log validation details with more info about actions
+    logger.debug(chalk.cyan('Response Validation:'), {
+        sections: foundSections.map(s => {
+            const status = s.found 
+                ? (s.hasContent 
+                    ? '✓' 
+                    : 'empty')
+                : '✗';
+            const extra = s.type === 'actions' && s.content 
+                ? ` (${s.content.split('\n').filter(l => l.trim().startsWith('-')).length} choices)`
+                : '';
+            return `${s.type}: ${status}${extra}`;
+        }),
+        required: ['narration', 'atmosphere', 'actions'].join(', '),
+        preview: response.substring(0, 100)
+    });
+
+    // Must have required sections with content
+    const requiredTypes = ['narration', 'atmosphere', 'actions'];
+    const hasRequiredSections = requiredTypes.every(type => {
+        const section = foundSections.find(s => s.type === type);
+        return section?.found && section?.hasContent;
+    });
+
+    // Don't allow empty sections
+    const hasEmptySections = foundSections.some(s => s.found && !s.hasContent);
+
+    // Basic format check - must have proper section formatting
     const hasSectionFormatting = /\[[^\]]+\]/.test(response);
     
-    return uniqueSectionTypes.size >= minimumSectionsRequired && hasSectionFormatting;
+    return hasRequiredSections && hasSectionFormatting && !hasEmptySections;
 }
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {

@@ -149,7 +149,7 @@ export function formatCharacterSheet(character: CharacterWithRelations, statusEf
                 value: formatStats(character),
                 inline: true
             },
-            { name: '\u200B', value: '\u200B', inline: true }, // Spacer Spacer
+            { name: '\u200B', value: '\u200B', inline: true }, // Spacer
             {
                 name: '⚔️ Combat',
                 value: formatCombatStats(character),
@@ -160,13 +160,17 @@ export function formatCharacterSheet(character: CharacterWithRelations, statusEf
             // Second Row - Left Side
             {
                 name: '🎯 Proficiencies',
-                value: character.proficiencies.map(p => `• ${p}`).join('\n'),
+                value: character.proficiencies.length > 0 
+                    ? character.proficiencies.map(p => `• ${p}`).join('\n')
+                    : '_None_',
                 inline: true
             },
             { name: '\u200B', value: '\u200B', inline: true }, // Spacer
             {
                 name: '🗣️ Languages',
-                value: character.languages.map(l => `• ${l}`).join('\n'),
+                value: character.languages.length > 0 
+                    ? character.languages.map(l => `• ${l}`).join('\n')
+                    : '_None_',
                 inline: true
             },
             { name: '\u200B', value: '\u200B', inline: false }, // Spacer
@@ -174,13 +178,17 @@ export function formatCharacterSheet(character: CharacterWithRelations, statusEf
             // Right Side Column (Spells & Abilities)
             {
                 name: '📚 Spells',
-                value: formatSpells(character.spells || []),
+                value: character.spells && character.spells.length > 0
+                    ? character.spells.map(s => `• ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n')
+                    : '_None_',
                 inline: true
             },
-            { name: '\u200B', value: '\u200B', inline: true }, // Spaceracer
+            { name: '\u200B', value: '\u200B', inline: true }, // Spacer
             {
                 name: '⚡ Abilities',
-                value: formatAbilities(character.abilities || []),
+                value: character.abilities && character.abilities.length > 0
+                    ? character.abilities.map(a => `• ${a.name}`).join('\n')
+                    : '_None_',
                 inline: true
             },
             { name: '\u200B', value: '\u200B', inline: false }, // Spacer
@@ -202,12 +210,11 @@ export function formatCharacterSheet(character: CharacterWithRelations, statusEf
                 name: '📈 Experience',
                 value: `\`${xpProgress}\`\n${character.experience % nextLevelXP}/${nextLevelXP} XP to next level`,
                 inline: false
-            },
-            { name: '\u200B', value: '\u200B', inline: false }, // Spacer
-
+            }
         )
         .setFooter({ text: 'Last updated' })
         .setTimestamp();
+
     return embed;
 }
 
