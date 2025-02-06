@@ -28,7 +28,7 @@ export async function handleRegister(interaction: ChatInputCommandInteraction) {
         });
 
         await interaction.reply({
-            content: `✅ Welcome ${nickname}! You've been successfully registered.\nUse \`/link_wallet\` to connect your Solana wallet.`,
+            content: `✅ Welcome ${nickname}! You've been successfully registered.\nUse \`/create_character\` to create your first char.\nUse \`/link_wallet\` to connect your Solana wallet and buy features and upgrades.`,
             ephemeral: true
         });
 

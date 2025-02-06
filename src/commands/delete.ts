@@ -72,18 +72,31 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
         await interaction.deferReply({ ephemeral: true });
 
         const adventureId = interaction.options.getString('adventure_id', true);
+        logger.debug('Deleting adventure:', { adventureId });
 
         // Find the adventure with its relationships
         const adventure = await prisma.adventure.findUnique({
             where: { id: adventureId },
             include: {
-                players: true,
+                players: {
+                    include: {
+                        character: true
+                    }
+                },
                 scenes: true,
-                user: true
+                user: true,
+                combats: {
+                    include: {
+                        participants: true,
+                        log: true
+                    }
+                },
+                memories: true
             }
         });
 
         if (!adventure) {
+            logger.debug('Adventure not found:', { adventureId });
             await interaction.editReply({
                 content: 'Adventure not found.'
             });
@@ -91,9 +104,16 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
         }
 
         // Check if user owns the adventure
-        if (adventure.userId !== (await prisma.user.findUnique({
+        const user = await prisma.user.findUnique({
             where: { discordId: interaction.user.id }
-        }))?.id) {
+        });
+
+        if (!user || adventure.userId !== user.id) {
+            logger.debug('User not authorized to delete adventure:', {
+                adventureId,
+                adventureUserId: adventure.userId,
+                requestingUserId: user?.id
+            });
             await interaction.editReply({
                 content: 'You can only delete adventures you created.'
             });
@@ -106,12 +126,12 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
         });
 
         // Delete related channels if they exist
-        if (adventure.categoryId) {
+        if (adventure.categoryId && interaction.guild) {
             try {
-                const category = await interaction.guild?.channels.fetch(adventure.categoryId).catch(() => null);
+                const category = await interaction.guild.channels.fetch(adventure.categoryId).catch(() => null);
                 if (category) {
                     // Delete all channels in the category
-                    const channels = interaction.guild?.channels.cache.filter(
+                    const channels = interaction.guild.channels.cache.filter(
                         channel => channel.parentId === category.id
                     );
                     
@@ -134,26 +154,50 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
         }
 
         // Delete all related data in the correct order
-        await prisma.$transaction(async (tx: Omit<typeof prisma, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">) => {
-            // 1. Delete adventure players
+        await prisma.$transaction(async (tx) => {
+            logger.debug('Starting database cleanup for adventure:', { adventureId });
+
+            // 1. Delete combat records
+            if (adventure.combats.length > 0) {
+                for (const combat of adventure.combats) {
+                    await tx.combatParticipant.deleteMany({
+                        where: { combatId: combat.id }
+                    });
+                    await tx.combatLog.deleteMany({
+                        where: { combatId: combat.id }
+                    });
+                }
+                await tx.combat.deleteMany({
+                    where: { adventureId: adventure.id }
+                });
+            }
+
+            // 2. Delete memory records
+            await tx.adventureMemory.deleteMany({
+                where: { adventureId: adventure.id }
+            });
+
+            // 3. Delete adventure players
             await tx.adventurePlayer.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
-            // 2. Delete scenes
+            // 4. Delete scenes
             await tx.scene.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
-            // 3. Delete inventory items
+            // 5. Delete inventory items
             await tx.inventoryItem.deleteMany({
                 where: { adventureId: adventure.id }
             });
 
-            // 4. Finally delete the adventure
+            // 6. Finally delete the adventure
             await tx.adventure.delete({
                 where: { id: adventure.id }
             });
+
+            logger.debug('Completed database cleanup for adventure:', { adventureId });
         });
 
         // Send final success message

@@ -28,6 +28,7 @@ import dotenv from 'dotenv';
 import { handleDisconnectVoice } from './commands/adventure';
 import { cleanupOldAudioFiles } from './utils/cleanup';
 import { logger } from './utils/logger';
+import { handleCombatAction } from './combat/handlers/commands';
 
 dotenv.config();
 
@@ -215,7 +216,7 @@ const commands = [
                 .setDescription('The character to modify')
                 .setRequired(true)
                 .setAutocomplete(true)
-        )
+        ),
 ].map(command => command.toJSON());
 
 // Schedule cleanup every 6 hours
@@ -249,12 +250,25 @@ client.on(Events.InteractionCreate, async interaction => {
             const focusedOption = interaction.options.getFocused(true);
             const focusedValue = focusedOption.value.toString().toLowerCase();
 
+            // Wrap the respond call in a try-catch
+            const sendResponse = async (choices: { name: string, value: string }[]) => {
+                try {
+                    await interaction.respond(choices.slice(0, 25)); // Limit to 25 choices
+                } catch (error: any) {
+                    if (error.code === 10062) {
+                        logger.warn('Interaction expired before autocomplete could respond');
+                        return;
+                    }
+                    logger.error('Error in autocomplete response:', error);
+                }
+            };
+
             if (interaction.commandName === 'accept_friend') {
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id }
                 });
 
-                if (!user) return;
+                if (!user) return await sendResponse([]);
 
                 const requests = await prisma.friendship.findMany({
                     where: {
@@ -271,7 +285,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     take: 25
                 });
 
-                await interaction.respond(
+                await sendResponse(
                     requests
                         .filter(req => req.user.username.toLowerCase().includes(focusedValue))
                         .map((req: FriendRequest) => ({
@@ -306,7 +320,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     return nameMatches && isNotSelected;
                 });
 
-                await interaction.respond(
+                await sendResponse(
                     availableCharacters.slice(0, 25).map(char => ({
                         name: `${char.name} (${char.class})`,
                         value: selectedCharacters.length > 0
@@ -332,7 +346,7 @@ client.on(Events.InteractionCreate, async interaction => {
                         char.name.toLowerCase().includes(searchTerm)
                     );
 
-                    await interaction.respond(
+                    await sendResponse(
                         availableCharacters.map(char => ({
                             name: `${char.name} (${char.class})`,
                             value: char.name
@@ -375,7 +389,7 @@ client.on(Events.InteractionCreate, async interaction => {
                         }
                     });
 
-                    await interaction.respond(
+                    await sendResponse(
                         adventures.map((adv: Adventure) => ({
                             name: `${adv.name} - by ${adv.user.username} - Players: ${adv.players.map(p => p.character.name).join(', ')}`,
                             value: adv.id
@@ -402,7 +416,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 if (!user) return;
 
-                await interaction.respond(
+                await sendResponse(
                     user.adventures.map(adv => ({
                         name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
                         value: adv.id
@@ -432,7 +446,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     !char.adventures.some(ap => ap.adventure.status === 'ACTIVE')
                 );
 
-                await interaction.respond(
+                await sendResponse(
                     availableCharacters
                         .filter(char => char.name.toLowerCase().includes(focusedValue))
                         .map(char => ({
@@ -442,6 +456,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 );
             }
             else if (interaction.commandName === 'delete_adventure') {
+                logger.debug('Handling delete_adventure autocomplete');
                 const user = await prisma.user.findUnique({
                     where: { discordId: interaction.user.id },
                     include: {
@@ -457,16 +472,37 @@ client.on(Events.InteractionCreate, async interaction => {
                     }
                 });
 
-                if (!user) return;
+                if (!user) {
+                    logger.debug('No user found for delete_adventure autocomplete');
+                    return await sendResponse([]);
+                }
 
-                await interaction.respond(
-                    user.adventures
-                        .filter(adv => adv.name.toLowerCase().includes(focusedValue))
-                        .map(adv => ({
-                            name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
-                            value: adv.id
-                        }))
-                );
+                logger.debug('Found adventures for autocomplete:', {
+                    count: user.adventures.length,
+                    adventures: user.adventures.map(a => ({ id: a.id, name: a.name }))
+                });
+
+                const choices = user.adventures
+                    .filter(adv => {
+                        const matchesSearch = adv.name.toLowerCase().includes(focusedValue);
+                        logger.debug('Adventure filter:', {
+                            name: adv.name,
+                            matchesSearch,
+                            searchValue: focusedValue
+                        });
+                        return matchesSearch;
+                    })
+                    .map(adv => ({
+                        name: `${adv.name} (Players: ${adv.players.map(p => p.character.name).join(', ')})`,
+                        value: adv.id
+                    }));
+
+                logger.debug('Sending autocomplete choices:', {
+                    choicesCount: choices.length,
+                    choices
+                });
+
+                await sendResponse(choices);
             }
             else if (interaction.commandName === 'adventure_settings') {
                 const user = await prisma.user.findUnique({
@@ -487,7 +523,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (!user) return;
 
                 const focusedValue = interaction.options.getFocused().toLowerCase();
-                await interaction.respond(
+                await sendResponse(
                     user.adventures
                         .filter(adv => adv.name.toLowerCase().includes(focusedValue))
                         .map(adv => ({
@@ -507,7 +543,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 if (!user) return;
 
                 const focusedValue = interaction.options.getFocused().toLowerCase();
-                await interaction.respond(
+                await sendResponse(
                     user.characters
                         .filter(char => char.name.toLowerCase().includes(focusedValue))
                         .map(char => ({

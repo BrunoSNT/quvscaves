@@ -1,5 +1,5 @@
 export type SupportedLanguage = 'en-US' | 'pt-BR';
-export type VoiceType = 'discord' | 'elevenlabs';
+export type VoiceType = 'discord' | 'elevenlabs' | 'text_only';
 export type CharacterClass = 'warrior' | 'mage' | 'rogue';
 export type AdventureStatus = 'ACTIVE' | 'PAUSED' | 'FINISHED';
 export type FriendshipStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -92,6 +92,49 @@ export interface GameState {
     mana: number;
     inventory: string[];
     questProgress: string;
+    lastCombatAction?: {
+        type: 'attack' | 'defend' | 'flee' | 'cast' | 'use';
+        success: boolean;
+        damage?: number;
+        target?: string;
+        effect?: string;
+    };
+}
+
+export interface CombatState {
+    isActive: boolean;
+    round: number;
+    turnOrder: string[];  // Character IDs in initiative order
+    currentTurn: string;  // Character ID whose turn it is
+    participants: {
+        id: string;
+        initiative: number;
+        isNPC: boolean;
+        health: number;
+        maxHealth: number;
+        statusEffects: string[];
+    }[];
+}
+
+export interface SceneContext {
+    description: string;
+    summary: string;
+    keyEvents: string[];
+    npcInteractions: Record<string, any>;
+    decisions: any[];
+    questProgress: Record<string, any>;
+    locationContext: string;
+}
+
+export interface Memory {
+    id: string;
+    type: string;
+    title: string;
+    description: string;
+    importance: number;
+    status: string;
+    tags: string[];
+    relatedMemories: string[];
 }
 
 export interface GameContext {
@@ -100,6 +143,22 @@ export interface GameContext {
     characters: Character[];
     currentState: GameState;
     language: SupportedLanguage;
+    combat?: CombatState;
+    adventureSettings: {
+        worldStyle: WorldStyle;
+        toneStyle: ToneStyle;
+        magicLevel: MagicLevel;
+        setting?: string;
+    };
+    memory: {
+        currentScene: SceneContext;
+        recentScenes: SceneContext[];  // Last 3-5 scenes for immediate context
+        significantMemories: Memory[];  // Important narrative elements
+        activeQuests: Memory[];        // Current quest lines
+        knownCharacters: Memory[];     // NPCs and their relationships
+        discoveredLocations: Memory[]; // Places visited or learned about
+        importantItems: Memory[];      // Significant items in the narrative
+    };
 }
 
 export interface VoiceSettings {

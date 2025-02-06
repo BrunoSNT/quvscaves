@@ -21,6 +21,17 @@ export async function generateResponse(context: GameContext): Promise<string> {
         const prompt = getGamePrompt(language);
         const contextStr = buildContextString(context, language);
 
+        logger.debug('Full context for AI:', {
+            prompt: prompt.intro,
+            context: contextStr,
+            combat: context.combat ? {
+                isActive: context.combat.isActive,
+                round: context.combat.round,
+                currentTurn: context.combat.currentTurn,
+                participants: context.combat.participants
+            } : 'No combat active'
+        });
+
         logger.debug('Sending request to AI endpoint:', {
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
@@ -28,18 +39,53 @@ export async function generateResponse(context: GameContext): Promise<string> {
             contextLength: contextStr.length
         });
 
+        const systemPrompt = `${prompt.system}
+
+SECTION FORMAT:
+All sections MUST be formatted with square brackets, like this:
+[Narration] - NOT **Narration**
+[Atmosphere] - NOT **Atmosphere**
+[Combat] - NOT **Combat**
+[Available Actions] - NOT **Actions**
+[Effects] - NOT **Effects**
+[Memory] - NOT **Memory**
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+Available tools:
+- updateCharacterStats: Update character's health, mana, or status effects
+- addInventoryItem: Add an item to character's inventory
+- createNPC: Create a new NPC in the scene
+- rollDice: Roll dice for skill checks or combat
+- updateQuestProgress: Update quest status and progress
+- createMemory: Create a new memory entry for significant events
+
+For each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>`;
+
         const response = await axios.post<AIResponse>(AI_ENDPOINT, {
             model: AI_MODEL,
-            prompt: prompt.intro + contextStr,
+            prompt: `<|im_start|>system
+${prompt.intro}
+
+${systemPrompt}
+<|im_end|>
+<|im_start|>user
+${contextStr}
+<|im_end|>
+<|im_start|>assistant
+`,
             temperature: 0.7,
             max_tokens: 2000,
             top_p: 0.9,
             repeat_penalty: 1.1,
-            stop: ["[End]", "<|end|>"],
+            stop: ["<|im_end|>"],
             stream: false
         });
-
-        logger.debug('Raw AI response:', response.data);
 
         if (!response?.data) {
             logger.error('No response data from AI endpoint');
@@ -67,12 +113,30 @@ export async function generateResponse(context: GameContext): Promise<string> {
             firstLine: aiResponse.split('\n')[0]
         });
 
-        if (!validateResponseFormat(aiResponse, language)) {
-            logger.error('Invalid AI response format:', aiResponse);
+        // Handle tool calls in the response
+        const toolCalls = aiResponse.match(/<tool_call>(.*?)<\/tool_call>/gs);
+        if (toolCalls) {
+            for (const toolCall of toolCalls) {
+                try {
+                    const toolData = JSON.parse(toolCall.replace(/<\/?tool_call>/g, ''));
+                    logger.debug('Processing tool call:', toolData);
+                    // TODO: Implement tool call handling
+                    // await handleToolCall(toolData, context);
+                } catch (error) {
+                    logger.error('Error processing tool call:', error);
+                }
+            }
+        }
+
+        // Remove tool calls from final response
+        const cleanResponse = aiResponse.replace(/<tool_call>.*?<\/tool_call>/gs, '').trim();
+
+        if (!validateResponseFormat(cleanResponse, language)) {
+            logger.error('Invalid AI response format:', cleanResponse);
             return createFallbackResponse(context);
         }
 
-        return aiResponse;
+        return cleanResponse;
 
     } catch (error) {
         if (axios.isAxiosError(error)) {
@@ -90,11 +154,53 @@ export async function generateResponse(context: GameContext): Promise<string> {
 }
 
 function validateResponseFormat(response: string, language: SupportedLanguage): boolean {
-    const requiredSections = language === 'en-US' 
-        ? ['[Narration]', '[Dialogue]', '[Atmosphere]', '[Suggested Choices]', '[Effects]', '[Spell Effects]']
-        : ['[Narração]', '[Diálogo]', '[Atmosfera]', '[Sugestões de Ação]', '[Efeitos]', '[Efeitos Mágicos]'];
+    const sectionNames = language === 'en-US' 
+        ? {
+            narration: ['Narration', 'Narrative'],
+            atmosphere: ['Atmosphere', 'Environment'],
+            combat: ['Combat', 'Battle'],
+            actions: ['Available Actions', 'Actions', 'Suggested Actions', 'Choices'],
+            effects: ['Effects', 'Status Effects'],
+            memory: ['Memory', 'History']
+        }
+        : {
+            narration: ['Narração', 'Narrativa'],
+            atmosphere: ['Atmosfera', 'Ambiente'],
+            combat: ['Combate', 'Batalha'],
+            actions: ['Ações Disponíveis', 'Sugestões de Ação', 'Ações', 'Escolhas'],
+            effects: ['Efeitos', 'Status'],
+            memory: ['Memória', 'História']
+        };
     
-    return requiredSections.some(section => response.includes(section));
+    // Create patterns for sections
+    const patterns = Object.values(sectionNames).flat().map(name => 
+        `\\[${name}\\]`  // Only accept bracket format
+    );
+
+    // Get unique section types present (ignoring duplicates)
+    const uniqueSectionTypes = new Set(
+        patterns
+            .map(pattern => {
+                const matches = response.match(new RegExp(pattern, 'gi'));
+                return matches ? pattern : null;
+            })
+            .filter(Boolean)
+    );
+
+    const minimumSectionsRequired = 2; // Reduced from 3 to be more lenient
+
+    logger.debug('Response format validation:', {
+        language,
+        uniqueSectionTypes: uniqueSectionTypes.size,
+        requiredMinimum: minimumSectionsRequired,
+        foundSections: Array.from(uniqueSectionTypes),
+        responsePreview: response.substring(0, 100)
+    });
+
+    // Basic format check - must have at least some section formatting
+    const hasSectionFormatting = /\[[^\]]+\]/.test(response);
+    
+    return uniqueSectionTypes.size >= minimumSectionsRequired && hasSectionFormatting;
 }
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
@@ -149,7 +255,38 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             playerActions: [action],
             characters: [character],
             currentState: gameState,
-            language: (adventure.language as SupportedLanguage) || 'en-US'
+            language: (adventure.language as SupportedLanguage) || 'en-US',
+            adventureSettings: {
+                worldStyle: adventure.worldStyle as any,
+                toneStyle: adventure.toneStyle as any,
+                magicLevel: adventure.magicLevel as any,
+                setting: adventure.setting || undefined
+            },
+            memory: {
+                currentScene: currentScene ? {
+                    description: currentScene.description,
+                    summary: currentScene.summary,
+                    keyEvents: currentScene.keyEvents,
+                    npcInteractions: JSON.parse(currentScene.npcInteractions as string || '{}'),
+                    decisions: JSON.parse(currentScene.decisions as string || '[]'),
+                    questProgress: JSON.parse(currentScene.questProgress as string || '{}'),
+                    locationContext: currentScene.locationContext || ''
+                } : {
+                    description: '',
+                    summary: '',
+                    keyEvents: [],
+                    npcInteractions: {},
+                    decisions: [],
+                    questProgress: {},
+                    locationContext: ''
+                },
+                recentScenes: [],
+                significantMemories: [],
+                activeQuests: [],
+                knownCharacters: [],
+                discoveredLocations: [],
+                importantItems: []
+            }
         };
 
         const response = await generateResponse(context);

@@ -2,10 +2,13 @@ import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, T
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
-import { SupportedLanguage, GameContext, GameState, CharacterClass, Character } from '../../types/game';
+import { SupportedLanguage, GameContext, GameState, CharacterClass, Character, WorldStyle, ToneStyle, MagicLevel } from '../../types/game';
 import { generateResponse } from '../../ai/gamemaster';
 import { speakInVoiceChannel } from '../../lib/voice';
 import { updateCharacterSheet, StatusEffect, ParsedEffects } from '../../utils';
+import { CombatManager } from '../../combat/manager';
+import { detectCombatTriggers, initiateCombat, getCombatState } from '../../combat/handlers/actions';
+import { CombatAction, CombatStatus } from '../../combat/types';
 
 type AdventurePlayerWithCharacter = {
     adventureId: string;
@@ -51,6 +54,16 @@ function parseEffects(effectsText: string): ParsedEffects {
         experienceChange: 0
     };
     
+    // Add combat effect parsing
+    const combatStartRegex = /iniciando combate|combat begins|initiative order/i;
+    const combatEndRegex = /combate termina|combat ends|battle is over/i;
+    
+    if (combatStartRegex.test(effectsText)) {
+        result.combatAction = 'start';
+    } else if (combatEndRegex.test(effectsText)) {
+        result.combatAction = 'end';
+    }
+
     // Match status effects like "+2 Intriga" or "Alerta: +3"
     const statusRegex = /\+(\d+)\s+([^,\n]+)|(\w+):\s*\+(\d+)/g;
     let match;
@@ -145,9 +158,124 @@ function toGameCharacter(dbChar: any): Character {
     };
 }
 
+async function getAdventureMemory(adventureId: string) {
+    // Get current scene and recent scenes
+    const scenes = await prisma.scene.findMany({
+        where: { adventureId },
+        orderBy: { createdAt: 'desc' },
+        take: 5  // Get last 5 scenes
+    });
+
+    // Get significant memories
+    const memories = await prisma.adventureMemory.findMany({
+        where: { 
+            adventureId,
+            importance: { gte: 3 }  // Only get important memories
+        },
+        orderBy: { updatedAt: 'desc' }
+    });
+
+    // Organize memories by type
+    const significantMemories = memories.filter(m => m.importance >= 4);
+    const activeQuests = memories.filter(m => m.type === 'QUEST' && m.status === 'ACTIVE');
+    const knownCharacters = memories.filter(m => m.type === 'CHARACTER');
+    const discoveredLocations = memories.filter(m => m.type === 'LOCATION');
+    const importantItems = memories.filter(m => m.type === 'ITEM');
+
+    return {
+        currentScene: scenes[0] ? {
+            description: scenes[0].description,
+            summary: scenes[0].summary,
+            keyEvents: scenes[0].keyEvents,
+            npcInteractions: scenes[0].npcInteractions ? JSON.parse(scenes[0].npcInteractions as string) : {},
+            decisions: scenes[0].decisions ? JSON.parse(scenes[0].decisions as string) : [],
+            questProgress: scenes[0].questProgress ? JSON.parse(scenes[0].questProgress as string) : {},
+            locationContext: scenes[0].locationContext || ''
+        } : {
+            description: '',
+            summary: '',
+            keyEvents: [],
+            npcInteractions: {},
+            decisions: [],
+            questProgress: {},
+            locationContext: ''
+        },
+        recentScenes: scenes.slice(1).map(scene => ({
+            description: scene.description,
+            summary: scene.summary,
+            keyEvents: scene.keyEvents,
+            npcInteractions: scene.npcInteractions ? JSON.parse(scene.npcInteractions as string) : {},
+            decisions: scene.decisions ? JSON.parse(scene.decisions as string) : [],
+            questProgress: scene.questProgress ? JSON.parse(scene.questProgress as string) : {},
+            locationContext: scene.locationContext || ''
+        })),
+        significantMemories,
+        activeQuests,
+        knownCharacters,
+        discoveredLocations,
+        importantItems
+    };
+}
+
+async function updateAdventureMemory(adventureId: string, aiResponse: string) {
+    // Extract memory updates from AI response
+    const memorySection = aiResponse.match(/\[Memory\](.*?)(?=\[|$)/s)?.[1].trim();
+    if (!memorySection) return;
+
+    try {
+        const memoryUpdates = JSON.parse(memorySection);
+        
+        // Update scene memory
+        if (memoryUpdates.scene) {
+            await prisma.scene.create({
+                data: {
+                    adventureId,
+                    name: memoryUpdates.scene.name,
+                    description: memoryUpdates.scene.description,
+                    summary: memoryUpdates.scene.summary,
+                    keyEvents: memoryUpdates.scene.keyEvents,
+                    npcInteractions: JSON.stringify(memoryUpdates.scene.npcInteractions),
+                    decisions: JSON.stringify(memoryUpdates.scene.decisions),
+                    questProgress: JSON.stringify(memoryUpdates.scene.questProgress),
+                    locationContext: memoryUpdates.scene.locationContext
+                }
+            });
+        }
+
+        // Update or create memories
+        if (memoryUpdates.memories) {
+            for (const memory of memoryUpdates.memories) {
+                await prisma.adventureMemory.upsert({
+                    where: {
+                        id: memory.id || 'new',
+                    },
+                    create: {
+                        adventureId,
+                        type: memory.type,
+                        title: memory.title,
+                        description: memory.description,
+                        importance: memory.importance,
+                        status: memory.status,
+                        tags: memory.tags,
+                        relatedMemories: memory.relatedMemories
+                    },
+                    update: {
+                        description: memory.description,
+                        importance: memory.importance,
+                        status: memory.status,
+                        tags: memory.tags,
+                        relatedMemories: memory.relatedMemories
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        logger.error('Error updating adventure memory:', error);
+    }
+}
+
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
     try {
-        // Defer reply immediately since we'll be doing async operations
         await interaction.deferReply();
         
         const action = interaction.options.getString('description', true);
@@ -225,17 +353,148 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             questProgress: userAdventure.status
         };
 
+        // Get adventure memory
+        const memory = await getAdventureMemory(userAdventure.id);
+
+        // Get recent scenes for context
+        const recentScenes = await prisma.scene.findMany({
+            where: { adventureId: userAdventure.id },
+            orderBy: { createdAt: 'desc' },
+            take: 5
+        });
+
+        const sceneContext = recentScenes.length > 0 
+            ? `${recentScenes[0].description}\n\nPrevious events:\n${
+                recentScenes.slice(1).map(scene => scene.summary).join('\n')
+              }`
+            : 'Starting a new adventure...';
+
         const context: GameContext = {
-            scene: currentScene?.description || 'Starting a new adventure...',
+            scene: sceneContext,
             playerActions: [action],
             characters: userAdventure.players.map(p => toGameCharacter(p.character)),
             currentState: gameState,
-            language: (userAdventure.language as SupportedLanguage) || 'en-US'
+            language: (userAdventure.language as SupportedLanguage) || 'en-US',
+            adventureSettings: {
+                worldStyle: userAdventure.worldStyle as WorldStyle,
+                toneStyle: userAdventure.toneStyle as ToneStyle,
+                magicLevel: userAdventure.magicLevel as MagicLevel,
+                setting: userAdventure.setting || undefined
+            },
+            memory
         };
+
+        // Check if we're already in combat
+        const existingCombat = await getCombatState(userAdventure.id);
+
+        // Detect combat triggers in the action
+        const { isCombat, type } = await detectCombatTriggers(action);
+
+        if (isCombat) {
+            if (!existingCombat && type === 'initiate') {
+                // Initialize combat
+                const playerCharacters = userAdventure.players.map(p => toGameCharacter(p.character));
+                const combat = await initiateCombat(userAdventure.id, playerCharacters);
+                
+                // Add combat context
+                context.combat = {
+                    isActive: true,
+                    round: combat.round,
+                    turnOrder: combat.participants.map(p => p.characterId),
+                    currentTurn: combat.participants[combat.currentTurn].characterId,
+                    participants: combat.participants.map(p => ({
+                        id: p.characterId,
+                        initiative: p.initiative,
+                        isNPC: p.isNPC,
+                        health: p.character.health,
+                        maxHealth: p.character.maxHealth,
+                        statusEffects: []  // Initialize empty, will be populated by effects system
+                    }))
+                };
+            } else if (existingCombat) {
+                // Handle combat action in existing combat
+                const combatManager = new CombatManager({
+                    id: existingCombat.id,
+                    adventureId: existingCombat.adventureId,
+                    round: existingCombat.round,
+                    currentTurn: existingCombat.currentTurn,
+                    status: existingCombat.status as CombatStatus,
+                    turnOrder: existingCombat.participants.map(p => p.characterId),
+                    participants: existingCombat.participants.map(p => ({
+                        id: p.characterId,
+                        characterId: p.characterId,
+                        character: { ...p.character, class: p.character.class as CharacterClass },
+                        initiative: p.initiative,
+                        temporaryEffects: [],
+                        isNPC: p.isNPC
+                    })),
+                    log: existingCombat.log.map(entry => ({
+                        round: entry.round,
+                        turn: entry.turn,
+                        actorId: entry.actorId,
+                        targetId: entry.targetId || undefined,
+                        action: entry.action as CombatAction,
+                        details: entry.details,
+                        outcome: entry.outcome,
+                        timestamp: entry.timestamp
+                    }))
+                });
+
+                // Perform the combat action
+                if (type && type !== 'initiate') {
+                    await combatManager.performAction(type as CombatAction);
+                    const newState = combatManager.getState();
+                    
+                    // Update combat state in database
+                    await prisma.combat.update({
+                        where: { id: existingCombat.id },
+                        data: {
+                            round: newState.round,
+                            currentTurn: newState.currentTurn,
+                            status: newState.status
+                        }
+                    });
+                }
+
+                // Add current combat state to context
+                context.combat = {
+                    isActive: true,
+                    round: existingCombat.round,
+                    turnOrder: existingCombat.participants.map(p => p.characterId),
+                    currentTurn: existingCombat.participants[existingCombat.currentTurn].characterId,
+                    participants: existingCombat.participants.map(p => ({
+                        id: p.characterId,
+                        initiative: p.initiative,
+                        isNPC: p.isNPC,
+                        health: p.character.health,
+                        maxHealth: p.character.maxHealth,
+                        statusEffects: []
+                    })),
+                };
+            }
+        }
 
         logger.debug('Generating AI response...');
         const response = await generateResponse(context);
         logger.debug('AI response generated');
+
+        // Save the scene
+        await prisma.scene.create({
+            data: {
+                adventureId: userAdventure.id,
+                name: `Scene ${Date.now()}`,
+                description: response,
+                summary: response.split('\n')[0], // First line as summary
+                keyEvents: [],
+                npcInteractions: JSON.stringify({}),
+                decisions: JSON.stringify([action]),
+                questProgress: JSON.stringify({}),
+                locationContext: currentScene?.locationContext || ''
+            }
+        });
+
+        // Update adventure memory based on AI response
+        await updateAdventureMemory(userAdventure.id, response);
         
         const channel = interaction.channel;
         if (!channel || !(channel instanceof BaseGuildTextChannel)) {
@@ -289,9 +548,10 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                         userAdventure.id
                     );
                 } catch (voiceError) {
-                    logger.error('Voice playback error:', voiceError);
+                    logger.error('Error in voice playback:', voiceError);
                 }
             }
+            // No additional handling needed for text_only, as we already sent the text message
         }
 
         // Send mechanic sections without voice
@@ -301,22 +561,70 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                 tts: false
             });
 
-            // Parse effects from the [Effects] section
+            // Parse effects from the [Effects] and [Combat Effects] sections
             const effectsSection = mechanicSections.find(section => 
                 section.startsWith('[Effects]') || 
                 section.startsWith('[Efeitos]')
             );
 
-            if (effectsSection) {
+            const combatEffectsSection = mechanicSections.find(section =>
+                section.startsWith('[Combat Effects]') ||
+                section.startsWith('[Efeitos de Combate]')
+            );
+
+            if (effectsSection || combatEffectsSection) {
                 const { 
                     statusEffects, 
                     healthChange, 
                     manaChange, 
                     experienceChange,
                     absoluteHealth,
-                    absoluteMana
-                } = parseEffects(effectsSection);
+                    absoluteMana,
+                    combatAction
+                } = parseEffects(effectsSection + '\n' + (combatEffectsSection || ''));
                 
+                // Handle combat state changes
+                if (combatAction === 'start') {
+                    const combat = await prisma.combat.findFirst({
+                        where: {
+                            adventureId: userAdventure.id,
+                            status: 'ACTIVE'
+                        }
+                    });
+
+                    if (!combat) {
+                        const playerCharacters = userAdventure.players.map(p => toGameCharacter(p.character));
+                        const combatManager = await CombatManager.initiateCombat(userAdventure.id, playerCharacters);
+                        const state = combatManager.getState();
+
+                        await prisma.combat.create({
+                            data: {
+                                adventureId: state.adventureId,
+                                round: state.round,
+                                currentTurn: state.currentTurn,
+                                status: state.status,
+                                participants: {
+                                    create: state.participants.map(p => ({
+                                        characterId: p.characterId,
+                                        initiative: p.initiative,
+                                        isNPC: p.isNPC || false
+                                    }))
+                                }
+                            }
+                        });
+                    }
+                } else if (combatAction === 'end') {
+                    await prisma.combat.updateMany({
+                        where: {
+                            adventureId: userAdventure.id,
+                            status: 'ACTIVE'
+                        },
+                        data: {
+                            status: 'COMPLETED'
+                        }
+                    });
+                }
+
                 // Update character stats if needed
                 if (healthChange || manaChange || experienceChange || absoluteHealth !== undefined || absoluteMana !== undefined) {
                     const updateData: any = {};

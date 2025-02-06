@@ -15,6 +15,7 @@ export interface ParsedEffects {
     experienceChange: number;
     absoluteHealth?: number;
     absoluteMana?: number;
+    combatAction?: 'start' | 'end';
 }
 
 const CLASS_COLORS = {
@@ -47,9 +48,23 @@ function getStatusEmoji(type: 'positive' | 'negative' | 'neutral'): string {
     }
 }
 
+function getModifierString(stat: number): string {
+    const modifier = Math.floor((stat - 10) / 2);
+    if (modifier === 0) return '';
+    const sign = modifier > 0 ? '+' : '';
+    return modifier > 0 
+        ? ` \`+${modifier}\``  // Green for positive
+        : `\`${modifier}\``   // Red for negative
+}
+
 function formatStats(character: Character): string {
-    return `\nSTR: ${character.strength.toString().padStart(2)}\nDEX: ${character.dexterity.toString().padStart(2)}\nCON: ${character.constitution.toString().padStart(2)}
-INT: ${character.intelligence.toString().padStart(2)}\nWIS: ${character.wisdom.toString().padStart(2)}\nCHA: ${character.charisma.toString().padStart(2)}`;
+    const formatStat = (value: number) => `${value.toString().padStart(2)}${getModifierString(value)}`;
+    return `\nSTR: ${formatStat(character.strength)}
+DEX: ${formatStat(character.dexterity)}
+CON: ${formatStat(character.constitution)}
+INT: ${formatStat(character.intelligence)}
+WIS: ${formatStat(character.wisdom)}
+CHA: ${formatStat(character.charisma)}`;
 }
 
 function formatCombatStats(character: Character): string {

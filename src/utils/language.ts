@@ -33,7 +33,9 @@ export const messages = {
         defaultScenes: {
             beginning: {
                 name: 'Beginning',
-                description: 'You stand at the threshold of your adventure...'
+                description: 'You stand at the threshold of your adventure...',
+                summary: 'The beginning of a new adventure',
+                location: 'The starting point of your journey'
             },
             fallback: {
                 narration: (characterName: string, action: string) => 
@@ -81,7 +83,9 @@ export const messages = {
         defaultScenes: {
             beginning: {
                 name: 'Início',
-                description: 'Você está no limiar de sua aventura...'
+                description: 'Você está no limiar de sua aventura...',
+                summary: 'O início de uma nova aventura',
+                location: 'O ponto de partida da sua jornada'
             },
             fallback: {
                 narration: (characterName: string, action: string) => 

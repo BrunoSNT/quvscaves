@@ -1,4 +1,4 @@
-import { Guild, CategoryChannel, TextChannel, PermissionsBitField, GuildBasedChannel } from 'discord.js';
+import { Guild, CategoryChannel, TextChannel, PermissionsBitField, GuildBasedChannel, ChannelType } from 'discord.js';
 import { logger } from '../../utils/logger';
 import { updateCharacterSheet } from '../../utils/character';
 import { prisma } from '../../lib/prisma';
@@ -12,7 +12,7 @@ export async function createVoiceChannel(guild: Guild, name: string): Promise<Ca
         // Create category with proper permissions
         const category = await guild.channels.create({
             name,
-            type: 4, // CategoryChannel = 4
+            type: ChannelType.GuildCategory,
             permissionOverwrites: [
                 {
                     id: guild.roles.everyone.id,
@@ -32,7 +32,7 @@ export async function createVoiceChannel(guild: Guild, name: string): Promise<Ca
         // Create voice channel with proper permissions
         await guild.channels.create({
             name: 'Table',
-            type: 2, // VoiceChannel = 2
+            type: ChannelType.GuildVoice,
             parent: category,
             permissionOverwrites: [
                 {
@@ -70,7 +70,7 @@ export async function createTextChannel(category: CategoryChannel, name: string)
     try {
         return await category.guild.channels.create({
             name,
-            type: 0, // TextChannel = 0
+            type: ChannelType.GuildText,
             parent: category,
             permissionOverwrites: [
                 {
@@ -110,7 +110,7 @@ export async function createPlayerChannels(category: CategoryChannel, characters
         for (const character of characters) {
             const channel = await category.guild.channels.create({
                 name: `${character.name.toLowerCase().replace(/\s+/g, '-')}`,
-                type: 0, // TextChannel = 0
+                type: ChannelType.GuildText,
                 parent: category,
                 permissionOverwrites: [
                     {

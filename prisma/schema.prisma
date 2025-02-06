@@ -71,6 +71,7 @@ model Character {
   inventory   InventoryItem[]
   spells      Spell[]
   abilities   Ability[]
+  combats     CombatParticipant[]
 }
 
 // Adventure model
@@ -95,6 +96,8 @@ model Adventure {
   players       AdventurePlayer[]
   scenes        Scene[]
   inventory     InventoryItem[]
+  combats       Combat[]
+  memories      AdventureMemory[]
 }
 
 // Joining table for adventures and characters
@@ -115,12 +118,36 @@ model AdventurePlayer {
 model Scene {
   id          String    @id @default(cuid())
   name        String
-  description String
+  description String    @db.Text
+  summary     String    @db.Text  // AI-generated summary of key events
   adventureId String
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   // Relations
   adventure   Adventure @relation(fields: [adventureId], references: [id])
+  // Memory fields
+  keyEvents   String[]  // Important narrative events
+  npcInteractions Json? // Track NPC relationships and conversations
+  decisions   Json?    // Important player decisions
+  questProgress Json?  // Current state of active quests
+  locationContext String? @db.Text // Description of current location and its state
+}
+
+// Memory model for long-term narrative tracking
+model AdventureMemory {
+  id            String    @id @default(cuid())
+  adventureId   String
+  type          String    // QUEST, CHARACTER, LOCATION, ITEM, EVENT
+  title         String
+  description   String    @db.Text
+  importance    Int       // 1-5 scale of narrative importance
+  status        String    // ACTIVE, RESOLVED, ABANDONED
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  // Relations
+  adventure     Adventure @relation(fields: [adventureId], references: [id])
+  relatedMemories String[] // IDs of related memory entries
+  tags          String[]  // For categorization and quick lookup
 }
 
 // Inventory items
@@ -178,4 +205,94 @@ model Ability {
     recharge    String?   // e.g., "short rest", "long rest"
     characterId String
     character   Character @relation(fields: [characterId], references: [id])
+}
+
+// Combat model
+model Combat {
+    id            String             @id @default(cuid())
+    adventureId   String
+    round         Int                @default(1)
+    currentTurn   Int                @default(0)
+    status        CombatStatus       // Using enum instead of string
+    createdAt     DateTime           @default(now())
+    updatedAt     DateTime           @updatedAt
+    // Relations
+    adventure     Adventure          @relation(fields: [adventureId], references: [id])
+    participants  CombatParticipant[]
+    log          CombatLog[]
+}
+
+enum CombatStatus {
+    ACTIVE
+    COMPLETED
+    FLED
+}
+
+// Combat participant model
+model CombatParticipant {
+    id            String             @id @default(cuid())
+    combatId      String
+    characterId   String
+    initiative    Int
+    isNPC         Boolean            @default(false)
+    createdAt     DateTime           @default(now())
+    updatedAt     DateTime           @updatedAt
+    // Relations
+    combat        Combat             @relation(fields: [combatId], references: [id])
+    character     Character          @relation(fields: [characterId], references: [id])
+    effects       StatusEffect[]
+}
+
+// Status effect model
+model StatusEffect {
+    id                  String             @id @default(cuid())
+    name                String
+    duration            Int
+    effectType          EffectType
+    effectTarget        EffectTarget
+    effectValue         Int
+    participantId       String
+    createdAt          DateTime            @default(now())
+    updatedAt          DateTime            @updatedAt
+    // Relations
+    participant        CombatParticipant   @relation(fields: [participantId], references: [id])
+}
+
+enum EffectType {
+    BUFF
+    DEBUFF
+    DAMAGE
+    HEAL
+}
+
+enum EffectTarget {
+    AC
+    ATTACK
+    DAMAGE
+    HEALTH
+    INITIATIVE
+}
+
+// Combat log model
+model CombatLog {
+    id            String             @id @default(cuid())
+    combatId      String
+    round         Int
+    turn          Int
+    actorId       String
+    targetId      String?
+    action        CombatAction
+    details       String             @db.Text
+    outcome       String             @db.Text
+    timestamp     DateTime           @default(now())
+    // Relations
+    combat        Combat             @relation(fields: [combatId], references: [id])
+}
+
+enum CombatAction {
+    ATTACK
+    CAST
+    DEFEND
+    USE_ITEM
+    FLEE
 } 

@@ -93,6 +93,12 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
         // Check if any character is already in an adventure
         const busyCharacters = characters.filter((c: Character) => c.adventures.some(ap => ap.adventure.status === 'ACTIVE'));
         if (busyCharacters.length > 0) {
+            logger.debug('Found busy characters:', busyCharacters.map(c => ({ 
+                name: c.name, 
+                adventures: c.adventures.map(a => ({ 
+                    status: a.adventure.status 
+                }))
+            })));
             return await interaction.editReply(
                 `The following characters are already in an adventure: ${busyCharacters.map((c: Character) => c.name).join(', ')}`
             );
@@ -297,6 +303,11 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                                 label: 'ElevenLabs',
                                 value: 'elevenlabs',
                                 description: 'Use ElevenLabs for more natural voices'
+                            },
+                            {
+                                label: 'Text Only',
+                                value: 'text_only',
+                                description: 'No voice, just text narration'
                             }
                         ])
                 );
@@ -400,9 +411,15 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
             // Create initial scene
             await prisma.scene.create({
                 data: {
-                    name: 'Beginning',
+                    name: getMessages(language).defaultScenes.beginning.name,
                     description: getMessages(language).defaultScenes.beginning.description,
-                    adventureId: adventure.id
+                    summary: getMessages(language).defaultScenes.beginning.summary,
+                    adventureId: adventure.id,
+                    keyEvents: [],
+                    npcInteractions: JSON.stringify({}),
+                    decisions: JSON.stringify({}),
+                    questProgress: JSON.stringify({}),
+                    locationContext: getMessages(language).defaultScenes.beginning.location
                 }
             });
 
@@ -433,9 +450,102 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                 });
             }
 
-            const welcomeMessage = getMessages(language).welcome.initialMessage(interaction.user.username);
-            await textChannel.send(welcomeMessage);
+            const welcomeMessage = language === 'pt-BR'
+                ? `${getMessages(language).welcome.initialMessage(interaction.user.username)}\n\nUse \`/action\` para descrever sua primeira ação na aventura!\nPor exemplo: \`/action Eu observo os arredores com cautela, procurando por sinais de perigo.\`\n\nOu clique no botão abaixo para uma introdução padrão:\n`
+                : `${getMessages(language).welcome.initialMessage(interaction.user.username)}\n\nUse \`/action\` to describe your first action in the adventure!\nFor example: \`/action I carefully observe my surroundings, looking for any signs of danger.\`\n\nOr click the button below for a default introduction:\n`;
+
+            const startButton = new ActionRowBuilder<MessageActionRowComponentBuilder>()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('start_adventure_action')
+                        .setLabel(language === 'pt-BR' ? 'Iniciar Aventura' : 'Start Adventure')
+                        .setStyle(1)
+                        .setEmoji('⚔️')
+                );
+
+            await textChannel.send({ content: welcomeMessage, components: [startButton] });
             await textChannel.send(getMessages(language).welcome.newPlayer(characters.map((c: Character) => c.name).join(', ')));
+
+            // Add button collector
+            const collector = textChannel.createMessageComponentCollector({ 
+                filter: i => i.customId === 'start_adventure_action',
+                time: 24 * 60 * 60 * 1000 // 24 hours
+            });
+
+            collector.on('collect', async i => {
+                try {
+                    // Get the character of the user who clicked
+                    const userCharacter = characters.find(c => c.user.discordId === i.user.id);
+                    if (!userCharacter) {
+                        await i.reply({ 
+                            content: language === 'pt-BR' 
+                                ? 'Você não tem um personagem nesta aventura.'
+                                : 'You don\'t have a character in this adventure.',
+                            ephemeral: true 
+                        });
+                        return;
+                    }
+
+                    // Trigger default action
+                    const defaultAction = language === 'pt-BR'
+                        ? `Eu observo atentamente o ambiente ao meu redor, tentando absorver cada detalhe deste novo começo.`
+                        : `I carefully observe my surroundings, taking in every detail of this new beginning.`;
+
+                    // First defer the reply
+                    await i.deferReply({ ephemeral: true });
+
+                    try {
+                        // Import and call handlePlayerAction
+                        const { handlePlayerAction } = await import('./action');
+                        const actionInteraction = {
+                            ...i,
+                            commandName: 'action',
+                            options: {
+                                getString: (name: string) => name === 'description' ? defaultAction : null
+                            },
+                            user: i.user,
+                            guild: i.guild,
+                            channel: i.channel,
+                            client: i.client,
+                            deferReply: async () => Promise.resolve(),
+                            editReply: i.editReply.bind(i),
+                            followUp: i.followUp.bind(i),
+                            replied: false,
+                            deferred: true,
+                            locale: language
+                        };
+                        
+                        // Handle the action
+                        await handlePlayerAction(actionInteraction as any);
+                        
+                        // Edit the deferred reply with success message
+                        await i.editReply({ 
+                            content: language === 'pt-BR'
+                                ? '✨ Aventura iniciada! Sua jornada começa...'
+                                : '✨ Adventure started! Your journey begins...'
+                        });
+                    } catch (error) {
+                        logger.error('Error executing default action:', error);
+                        await i.editReply({ 
+                            content: language === 'pt-BR'
+                                ? 'Erro ao iniciar a aventura. Por favor, tente usar o comando `/action` manualmente.'
+                                : 'Error starting the adventure. Please try using the `/action` command manually.'
+                        });
+                    }
+                } catch (error) {
+                    logger.error('Error in collector:', error);
+                    try {
+                        await i.reply({
+                            content: language === 'pt-BR'
+                                ? 'Erro ao processar a ação. Por favor, tente novamente.'
+                                : 'Error processing action. Please try again.',
+                            ephemeral: true
+                        });
+                    } catch (replyError) {
+                        logger.error('Error sending error message:', replyError);
+                    }
+                }
+            });
 
             // Move the adventure creator to the Table voice channel
             const tableVoiceChannel = interaction.guild.channels.cache.find(
@@ -443,9 +553,9 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                           channel.parentId === category.id
             ) as VoiceChannel;
 
-            if (tableVoiceChannel && interaction.member?.voice) {
+            if (tableVoiceChannel && interaction.member && 'voice' in interaction.member) {
                 try {
-                    await (interaction.member.voice as any).setChannel(tableVoiceChannel.id);
+                    await interaction.member.voice.setChannel(tableVoiceChannel.id);
                     logger.debug('Moved adventure creator to Table voice channel');
                 } catch (error) {
                     logger.error('Failed to move user to Table voice channel:', error);

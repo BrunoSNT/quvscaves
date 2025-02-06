@@ -275,7 +275,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                             .setStyle(2)
                     );
 
-                    const rows = [];
+                    const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
                     for (let i = 0; i < statButtons.length; i += 3) {
                         rows.push(
                             new ActionRowBuilder<MessageActionRowComponentBuilder>()

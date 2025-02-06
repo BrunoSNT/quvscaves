@@ -9,11 +9,7 @@ import {
     StreamType,
     VoiceConnection
 } from '@discordjs/voice';
-import { Guild, VoiceChannel, CategoryChannel, Snowflake as DiscordChannelType } from 'discord.js';
-import { createReadStream } from 'fs';
-import { join } from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { Guild, VoiceChannel, CategoryChannel, ChannelType } from 'discord.js';
 import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import axios from 'axios';
@@ -67,7 +63,7 @@ async function createVoiceChannel(guild: Guild, categoryId: string, channelName:
 
     return await guild.channels.create({
         name: channelName,
-        type: DiscordChannelType.GuildVoice,
+        type: ChannelType.GuildVoice,
         parent: category
     }) as VoiceChannel;
 }
@@ -96,7 +92,7 @@ export async function speakInVoiceChannel(
         let voiceChannel = guild.channels.cache.find(
             (channel): channel is VoiceChannel =>
                 channel.name === voiceChannelName &&
-                channel.type === DiscordChannelType.GuildVoice
+                channel.type === ChannelType.GuildVoice
         );
 
         if (!voiceChannel) {
