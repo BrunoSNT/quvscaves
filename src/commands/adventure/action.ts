@@ -232,51 +232,20 @@ async function updateAdventureMemory(adventureId: string, aiResponse: string) {
     if (!memorySection) return;
 
     try {
-        const memoryUpdates = JSON.parse(memorySection);
-        
-        // Update scene memory
-        if (memoryUpdates.scene) {
-            await prisma.scene.create({
+        // Find the most recent scene
+        const recentScene = await prisma.scene.findFirst({
+            where: { adventureId },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        if (recentScene) {
+            // Update the scene with the memory text
+            await prisma.scene.update({
+                where: { id: recentScene.id },
                 data: {
-                    adventureId,
-                    name: memoryUpdates.scene.name,
-                    description: memoryUpdates.scene.description,
-                    summary: memoryUpdates.scene.summary,
-                    keyEvents: memoryUpdates.scene.keyEvents,
-                    npcInteractions: JSON.stringify(memoryUpdates.scene.npcInteractions),
-                    decisions: JSON.stringify(memoryUpdates.scene.decisions),
-                    questProgress: JSON.stringify(memoryUpdates.scene.questProgress),
-                    locationContext: memoryUpdates.scene.locationContext
+                    keyEvents: [memorySection], // Store the memory text as a key event
                 }
             });
-        }
-
-        // Update or create memories
-        if (memoryUpdates.memories) {
-            for (const memory of memoryUpdates.memories) {
-                await prisma.adventureMemory.upsert({
-                    where: {
-                        id: memory.id || 'new',
-                    },
-                    create: {
-                        adventureId,
-                        type: memory.type,
-                        title: memory.title,
-                        description: memory.description,
-                        importance: memory.importance,
-                        status: memory.status,
-                        tags: memory.tags,
-                        relatedMemories: memory.relatedMemories
-                    },
-                    update: {
-                        description: memory.description,
-                        importance: memory.importance,
-                        status: memory.status,
-                        tags: memory.tags,
-                        relatedMemories: memory.relatedMemories
-                    }
-                });
-            }
         }
     } catch (error) {
         logger.error('Error updating adventure memory:', error);
