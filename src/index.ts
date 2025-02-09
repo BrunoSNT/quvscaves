@@ -1,11 +1,11 @@
-import { config } from 'dotenv';
 import { 
     Client,
     Events, 
     SlashCommandBuilder,
     REST,
     IntentsBitField as Intents,
-    BaseGuildTextChannel
+    BaseGuildTextChannel,
+    EmbedBuilder
 } from 'discord.js';
 import { handleRegister } from './commands/register';
 import { handleHelp } from './commands/help';
@@ -27,9 +27,7 @@ import { handlePlayerAction } from './commands/adventure';
 import { handleAdventureSettings } from './commands/adventure';
 import dotenv from 'dotenv';
 import { handleDisconnectVoice } from './commands/adventure';
-import { cleanupOldAudioFiles } from './utils/cleanup';
 import { logger } from './utils/logger';
-import { handleCombatAction } from './combat/handlers/commands';
 import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel } from './types/game';
 import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
 import { getAdventureMemory } from './commands/adventure/action';
@@ -224,9 +222,6 @@ const commands = [
         ),
 ].map(command => command.toJSON());
 
-// Schedule cleanup every 6 hours
-const CLEANUP_INTERVAL = 6 * 60 * 60 * 1000;
-
 client.once(Events.ClientReady, async (c) => {
     logger.info(`Ready! Logged in as ${c.user.tag}`);
     
@@ -238,12 +233,6 @@ client.once(Events.ClientReady, async (c) => {
         );
         logger.info('Successfully registered application commands.');
 
-        // Schedule periodic cleanup
-        setInterval(cleanupOldAudioFiles, CLEANUP_INTERVAL);
-        // Run initial cleanup
-        cleanupOldAudioFiles().catch(error => 
-            logger.error('Error in initial cleanup:', error)
-        );
     } catch (error) {
         logger.error('Error registering commands:', error);
     }
@@ -688,8 +677,14 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 // Send the narrative content
                 if (narrativeContent) {
+                    const narrativeEmbed = new EmbedBuilder()
+                        .setTitle('📖 Story Update')
+                        .setDescription(narrativeContent)
+                        .setColor('#0099ff')
+                        .setTimestamp();
+
                     await channel.send({
-                        content: narrativeContent,
+                        embeds: [narrativeEmbed],
                         tts: userAdventure.voiceType === 'discord'
                     });
                 }
@@ -799,7 +794,6 @@ client.on(Events.InteractionCreate, async interaction => {
 process.on('SIGTERM', async () => {
     logger.info('SIGTERM received. Starting graceful shutdown...');
     try {
-        await cleanupOldAudioFiles();
         await prisma.$disconnect();
         client.destroy();
         process.exit(0);
@@ -812,7 +806,6 @@ process.on('SIGTERM', async () => {
 process.on('SIGINT', async () => {
     logger.info('SIGINT received. Starting graceful shutdown...');
     try {
-        await cleanupOldAudioFiles();
         await prisma.$disconnect();
         client.destroy();
         process.exit(0);

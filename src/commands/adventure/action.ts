@@ -605,8 +605,15 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
 
         // Send the combined narrative content
         if (narrativeContent) {
+            const sectionType = uniqueNarrativeSections[0]?.match(/\[(Narration|Narração|Dialogue|Diálogo|Atmosphere|Atmosfera)/i)?.[1];
+            const emoji = {
+                Narration: '��', Narração: '📜',
+                Dialogue: '��', Diálogo: '💬', 
+                Atmosphere: '☁️', Atmosfera: '☁️'
+            }[sectionType] || '📖';
+
             await channel.send({
-                content: narrativeContent,
+                content: `${emoji} ${narrativeContent}\n\n_${getMessages(context.language).actions.customPrompt}_`,
                 tts: userAdventure.voiceType === 'discord'
             });
         }
