@@ -9,6 +9,9 @@ export type Adventure = {
     toneStyle: string;
     magicLevel: string;
     setting: string | null;
+    voiceType: 'none' | 'discord' | 'elevenlabs';
+    categoryId?: string;
+    privacy: string;
     players: {
         character: {
             id: string;

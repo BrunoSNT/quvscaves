@@ -1,6 +1,7 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, BaseGuildTextChannel } from 'discord.js';
 import { ResponseSections } from '../adventure';
 import { SupportedLanguage } from '../../types/game';
+import { logger } from '../logger';
 
 // Scene assets configuration
 const SCENE_ASSETS = {
@@ -178,4 +179,97 @@ export function extractSections(response: string, language: SupportedLanguage): 
         effects: findSection(sectionNames.effects),
         memory: findSection(sectionNames.memory)
     };
+}
+
+export async function sendFormattedResponse({
+    channel,
+    characterName,
+    action,
+    response,
+    language,
+    voiceType = 'none'
+}: {
+    channel: BaseGuildTextChannel;
+    characterName: string;
+    action: string;
+    response: string;
+    language: SupportedLanguage;
+    voiceType?: 'discord' | 'elevenlabs' | 'none';
+}) {
+    // First send the player's action
+    await channel.send({
+        content: `🎭 **${characterName}**: ${action}`,
+        tts: false
+    });
+
+    // Extract all sections
+    const sections = extractSections(response, language);
+
+    // Create the main story embed
+    const storyEmbed = new EmbedBuilder()
+        .setColor('#2B2D31')
+        .setTitle('📖 Story Update')
+        .setTimestamp();
+
+    // Add narrative content
+    if (sections.narration) {
+        storyEmbed.addFields({
+            name: '📜 Narration',
+            value: sections.narration,
+            inline: false
+        });
+    }
+
+    // Add atmosphere if present
+    if (sections.atmosphere) {
+        storyEmbed.addFields({
+            name: '🌟 Atmosphere',
+            value: sections.atmosphere,
+            inline: false
+        });
+    }
+
+    // Add effects if present
+    if (sections.effects) {
+        storyEmbed.addFields({
+            name: '✨ Effects',
+            value: sections.effects,
+            inline: false
+        });
+    }
+
+    // Add memory if present
+    if (sections.memory) {
+        storyEmbed.addFields({
+            name: '📜 Memory',
+            value: sections.memory,
+            inline: false
+        });
+    }
+
+    // Add footer
+    storyEmbed.setFooter({ 
+        text: language === 'pt-BR' 
+            ? 'Use /action para realizar uma ação personalizada'
+            : 'Use /action to perform a custom action',
+        iconURL: 'https://i.imgur.com/AfFp7pu.png'
+    });
+
+    // Send the story embed
+    await channel.send({
+        embeds: [storyEmbed],
+        tts: voiceType === 'discord'
+    });
+
+    // Create and send action buttons if there are any
+    if (sections.actions.length > 0) {
+        const actionButtons = createActionButtons(sections.actions);
+        await channel.send({
+            content: language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
+            components: actionButtons,
+            tts: false
+        });
+    }
+
+    return sections;
 } 

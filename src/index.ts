@@ -32,6 +32,8 @@ import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel } fro
 import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
 import { getAdventureMemory } from './commands/adventure/action';
 import { generateResponse } from './ai/gamemaster';
+import { getMessages } from './utils/language';
+import { sendFormattedResponse } from './utils/discord/embeds';
 
 dotenv.config();
 
@@ -640,66 +642,15 @@ client.on(Events.InteractionCreate, async interaction => {
                     return;
                 }
 
-                // Extract and process sections (reuse the existing section processing logic)
-                const sections = response.split(/\[(?=[A-Z])/);
-                
-                // Group sections by type (same as in handlePlayerAction)
-                const narrativeSections = sections.filter(section => 
-                    section.startsWith('Narration') || 
-                    section.startsWith('Narração') || 
-                    section.startsWith('Dialogue') || 
-                    section.startsWith('Diálogo') || 
-                    section.startsWith('Atmosphere') ||
-                    section.startsWith('Atmosfera')
-                ).map(section => {
-                    const cleanedSection = section.trim()
-                        .replace(/Characters Present:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Current Status:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Recent Events:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Active Quests:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Known Characters:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Discovered Locations:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/Important Items:[\s\S]*?(?=\[|$)/, '')
-                        .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
-                        .replace(/\[\]}}.*$/, '')
-                        .replace(/The beginning of a new adventure.*$/, '');
-                    return `[${cleanedSection}`;
+                // Send formatted response
+                await sendFormattedResponse({
+                    channel,
+                    characterName: userCharacter.name,
+                    action,
+                    response,
+                    language: userAdventure.language as SupportedLanguage,
+                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs'
                 });
-
-                const uniqueNarrativeSections = Array.from(new Set(narrativeSections));
-                const narrativeContent = uniqueNarrativeSections.join('\n\n');
-
-                // Send the player's action
-                await channel.send({
-                    content: `🎭 **${userCharacter.name}**: ${action}`,
-                    tts: false
-                });
-
-                // Send the narrative content
-                if (narrativeContent) {
-                    const narrativeEmbed = new EmbedBuilder()
-                        .setTitle('📖 Story Update')
-                        .setDescription(narrativeContent)
-                        .setColor('#0099ff')
-                        .setTimestamp();
-
-                    await channel.send({
-                        embeds: [narrativeEmbed],
-                        tts: userAdventure.voiceType === 'discord'
-                    });
-                }
-
-                // Create and send new action buttons
-                const suggestedActions = extractSuggestedActions(response, context.language);
-                const actionButtons = createActionButtons(suggestedActions);
-                
-                if (actionButtons.length > 0) {
-                    await channel.send({
-                        content: context.language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
-                        components: actionButtons,
-                        tts: false
-                    });
-                }
 
                 await interaction.editReply({
                     content: '✨ Ação processada!'

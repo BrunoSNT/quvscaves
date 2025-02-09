@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, TextChannel, DMChannel, NewsChannel, ThreadChannel, BaseGuildTextChannel, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder } from 'discord.js';
+import { ChatInputCommandInteraction, MessagePayload, InteractionReplyOptions, TextChannel, DMChannel, NewsChannel, ThreadChannel, BaseGuildTextChannel, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, EmbedBuilder } from 'discord.js';
 import { prisma } from '../../lib/prisma';
 import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
@@ -9,6 +9,10 @@ import { updateCharacterSheet, StatusEffect, ParsedEffects } from '../../utils';
 import { CombatManager } from '../../combat/manager';
 import { detectCombatTriggers, initiateCombat, getCombatState } from '../../combat/handlers/actions';
 import { CombatAction, CombatStatus } from '../../combat/types';
+import { getActiveAdventure, Adventure } from '../../lib/adventure';
+import { getCharacter, DBCharacter } from '../../lib/character';
+import { getAdventureMemory as getMemory } from '../../lib/memory';
+import { sendFormattedResponse } from '../../utils/discord/embeds';
 
 type AdventurePlayerWithCharacter = {
     adventureId: string;
@@ -325,47 +329,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         const action = interaction.options.getString('description', true);
         logger.debug(`Processing action for user ${interaction.user.id}: ${action}`);
         
-        // First find the user's active adventures through AdventurePlayer
-        const userAdventure = await prisma.adventure.findFirst({
-            where: { 
-                status: 'ACTIVE',
-                players: {
-                    some: {
-                        character: {
-                            user: {
-                                discordId: interaction.user.id
-                            }
-                        }
-                    }
-                }
-            },
-            include: {
-                players: {
-                    include: {
-                        character: {
-                            include: {
-                                user: true,
-                                spells: true,
-                                abilities: true,
-                                inventory: true
-                            }
-                        }
-                    }
-                },
-                scenes: {
-                    orderBy: {
-                        createdAt: 'desc'
-                    },
-                    take: 1
-                }
-            },
-            orderBy: {
-                createdAt: 'desc'
-            }
-        });
-
-        logger.debug(`Found adventure: ${userAdventure?.id}`);
-
+        const userAdventure = await getActiveAdventure(interaction.user.id);
         if (!userAdventure) {
             await interaction.editReply({
                 content: getMessages(interaction.locale as SupportedLanguage).errors.needActiveAdventure,
@@ -373,12 +337,9 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        // Find the user's character in this adventure
         const userCharacter = userAdventure.players.find(
-            (p: AdventurePlayerWithCharacter) => p.character.user.discordId === interaction.user.id
+            p => p.character.user.discordId === interaction.user.id
         )?.character;
-
-        logger.debug(`Found character: ${userCharacter?.name}`);
 
         if (!userCharacter) {
             await interaction.editReply({
@@ -387,38 +348,20 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        const currentScene = userAdventure.scenes[0];
-        logger.debug(`Current scene: ${currentScene?.id}`);
-
-        const gameState: GameState = {
-            health: userCharacter.health,
-            mana: userCharacter.mana,
-            inventory: [],
-            questProgress: userAdventure.status
-        };
-
-        // Get adventure memory
-        const memory = await getAdventureMemory(userAdventure.id);
-
-        // Get recent scenes for context
-        const recentScenes = await prisma.scene.findMany({
-            where: { adventureId: userAdventure.id },
-            orderBy: { createdAt: 'desc' },
-            take: 5
-        });
-
-        const sceneContext = recentScenes.length > 0 
-            ? `${recentScenes[0].description}\n\nPrevious events:\n${
-                recentScenes.slice(1).map(scene => scene.summary).join('\n')
-              }`
-            : 'Starting a new adventure...';
+        const gameCharacter = toGameCharacter(userCharacter);
+        const memory = await getMemory(userAdventure.id);
 
         const context: GameContext = {
-            scene: sceneContext,
+            scene: '',
             playerActions: [action],
-            characters: userAdventure.players.map(p => toGameCharacter(p.character)),
-            currentState: gameState,
-            language: (userAdventure.language as SupportedLanguage) || 'en-US',
+            characters: [gameCharacter],
+            currentState: {
+                health: userCharacter.health,
+                mana: userCharacter.mana,
+                inventory: [],
+                questProgress: userAdventure.status
+            },
+            language: userAdventure.language as SupportedLanguage || 'en-US',
             adventureSettings: {
                 worldStyle: userAdventure.worldStyle as WorldStyle,
                 toneStyle: userAdventure.toneStyle as ToneStyle,
@@ -427,96 +370,6 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             },
             memory
         };
-
-        // Check if we're already in combat
-        const existingCombat = await getCombatState(userAdventure.id);
-
-        // Detect combat triggers in the action
-        const { isCombat, type } = await detectCombatTriggers(action);
-
-        if (isCombat) {
-            if (!existingCombat && type === 'initiate') {
-                // Initialize combat
-                const playerCharacters = userAdventure.players.map(p => toGameCharacter(p.character));
-                const combat = await initiateCombat(userAdventure.id, playerCharacters);
-                
-                // Add combat context
-                context.combat = {
-                    isActive: true,
-                    round: combat.round,
-                    turnOrder: combat.participants.map(p => p.characterId),
-                    currentTurn: combat.participants[combat.currentTurn].characterId,
-                    participants: combat.participants.map(p => ({
-                        id: p.characterId,
-                        initiative: p.initiative,
-                        isNPC: p.isNPC,
-                        health: p.character.health,
-                        maxHealth: p.character.maxHealth,
-                        statusEffects: []  // Initialize empty, will be populated by effects system
-                    }))
-                };
-            } else if (existingCombat) {
-                // Handle combat action in existing combat
-                const combatManager = new CombatManager({
-                    id: existingCombat.id,
-                    adventureId: existingCombat.adventureId,
-                    round: existingCombat.round,
-                    currentTurn: existingCombat.currentTurn,
-                    status: existingCombat.status as CombatStatus,
-                    turnOrder: existingCombat.participants.map(p => p.characterId),
-                    participants: existingCombat.participants.map(p => ({
-                        id: p.characterId,
-                        characterId: p.characterId,
-                        character: { ...p.character, class: p.character.class as CharacterClass },
-                        initiative: p.initiative,
-                        temporaryEffects: [],
-                        isNPC: p.isNPC
-                    })),
-                    log: existingCombat.log.map(entry => ({
-                        round: entry.round,
-                        turn: entry.turn,
-                        actorId: entry.actorId,
-                        targetId: entry.targetId || undefined,
-                        action: entry.action as CombatAction,
-                        details: entry.details,
-                        outcome: entry.outcome,
-                        timestamp: entry.timestamp
-                    }))
-                });
-
-                // Perform the combat action
-                if (type && type !== 'initiate') {
-                    await combatManager.performAction(type as CombatAction);
-                    const newState = combatManager.getState();
-                    
-                    // Update combat state in database
-                    await prisma.combat.update({
-                        where: { id: existingCombat.id },
-                        data: {
-                            round: newState.round,
-                            currentTurn: newState.currentTurn,
-                            status: newState.status
-                        }
-                    });
-                }
-
-                // Add current combat state to context
-                context.combat = {
-                    isActive: true,
-                    round: existingCombat.round,
-                    turnOrder: existingCombat.participants.map(p => p.characterId),
-                    currentTurn: existingCombat.participants[existingCombat.currentTurn].characterId,
-                    participants: existingCombat.participants.map(p => ({
-                        id: p.characterId,
-                        initiative: p.initiative,
-                        isNPC: p.isNPC,
-                        health: p.character.health,
-                        maxHealth: p.character.maxHealth,
-                        statusEffects: []
-                    })),
-                };
-            }
-        }
 
         logger.debug('Generating AI response...');
         const response = await generateResponse(context);
@@ -533,7 +386,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                 npcInteractions: JSON.stringify({}),
                 decisions: JSON.stringify([action]),
                 questProgress: JSON.stringify({}),
-                locationContext: currentScene?.locationContext || ''
+                locationContext: ''
             }
         });
 
@@ -548,98 +401,21 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        // Extract sections
-        const sections = response.split(/\[(?=[A-Z])/);
-        
-        // Group sections by type
-        const narrativeSections = sections.filter(section => 
-            section.startsWith('Narration') || 
-            section.startsWith('Narração') || 
-            section.startsWith('Dialogue') || 
-            section.startsWith('Diálogo') || 
-            section.startsWith('Atmosphere') ||
-            section.startsWith('Atmosfera')
-        ).map(section => {
-            // Clean up the section text to remove any metadata and malformed content
-            const cleanedSection = section.trim()
-                .replace(/Characters Present:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Current Status:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Recent Events:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Active Quests:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Known Characters:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Discovered Locations:[\s\S]*?(?=\[|$)/, '')
-                .replace(/Important Items:[\s\S]*?(?=\[|$)/, '')
-                .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
-                .replace(/\[\]}}.*$/, '') // Remove malformed JSON-like content
-                .replace(/The beginning of a new adventure.*$/, ''); // Remove redundant ending
-            return `[${cleanedSection}`;
+        // Send formatted response
+        await sendFormattedResponse({
+            channel,
+            characterName: userCharacter.name,
+            action,
+            response,
+            language: userAdventure.language as SupportedLanguage,
+            voiceType: userAdventure.voiceType
         });
-
-        // Remove duplicate narrative sections
-        const uniqueNarrativeSections = Array.from(new Set(narrativeSections));
-
-        const effectsSections = sections.filter(section =>
-            section.startsWith('Effects') ||
-            section.startsWith('Efeitos')
-        ).map(section => {
-            // Clean up effects section
-            const cleanedSection = section.trim()
-                .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
-                .replace(/\[\]}}.*$/, '');
-            return `[${cleanedSection}`;
-        });
-
-        // Extract suggested actions and create buttons
-        const suggestedActions = extractSuggestedActions(response, context.language);
-        const actionButtons = createActionButtons(suggestedActions);
-
-        // Combine narrative sections into a single message
-        const narrativeContent = uniqueNarrativeSections.join('\n\n');
-        const effectsContent = effectsSections.join('\n\n');
-
-        // First send the player's action
-        await channel.send({
-            content: `🎭 **${userCharacter.name}**: ${action}`,
-            tts: false
-        });
-
-        // Send the combined narrative content
-        if (narrativeContent) {
-            const sectionType = uniqueNarrativeSections[0]?.match(/\[(Narration|Narração|Dialogue|Diálogo|Atmosphere|Atmosfera)/i)?.[1];
-            const emoji = {
-                Narration: '��', Narração: '📜',
-                Dialogue: '��', Diálogo: '💬', 
-                Atmosphere: '☁️', Atmosfera: '☁️'
-            }[sectionType] || '📖';
-
-            await channel.send({
-                content: `${emoji} ${narrativeContent}\n\n_${getMessages(context.language).actions.customPrompt}_`,
-                tts: userAdventure.voiceType === 'discord'
-            });
-        }
-
-        // Send effects content if present
-        if (effectsContent) {
-            await channel.send({
-                content: effectsContent,
-                tts: false
-            });
-        }
-
-        // Send action buttons in a separate message
-        if (actionButtons.length > 0) {
-            await channel.send({
-                content: context.language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
-                components: actionButtons,
-                tts: false
-            });
-        }
 
         // Voice playback if enabled
         if (userAdventure.categoryId && userAdventure.voiceType === 'elevenlabs') {
             try {
                 await speakInVoiceChannel(
-                    narrativeContent,
+                    response,
                     interaction.guild!,
                     userAdventure.categoryId,
                     userAdventure.id
