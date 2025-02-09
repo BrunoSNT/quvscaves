@@ -9,9 +9,9 @@ import { getGamePrompt, buildContextString, createFallbackResponse } from '../ut
 import chalk from 'chalk';
 
 const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
-const AI_MODEL = process.env.AI_MODEL || 'qwen2.5:14b';
+const AI_MODEL = 'qwen2.5:14b';
 
-interface AIResponse {
+export interface AIResponse {
     response?: string;
     error?: string;
 }
@@ -195,14 +195,12 @@ function validateResponseFormat(response: string, language: SupportedLanguage): 
             narration: ['Narration', 'Narrative'],
             atmosphere: ['Atmosphere', 'Environment'],
             actions: ['Available Actions', 'Actions', 'Suggested Actions', 'Choices'],
-            effects: ['Effects', 'Status Effects'],
             memory: ['Memory', 'History']
         }
         : {
             narration: ['Narração', 'Narrativa'],
             atmosphere: ['Atmosfera', 'Ambiente'],
             actions: ['Ações Disponíveis', 'Sugestões de Ação', 'Ações', 'Escolhas'],
-            effects: ['Efeitos', 'Status'],
             memory: ['Memória', 'História']
         };
     
@@ -271,13 +269,15 @@ function validateResponseFormat(response: string, language: SupportedLanguage): 
         return section?.found && section?.hasContent;
     });
 
-    // Don't allow empty sections
-    const hasEmptySections = foundSections.some(s => s.found && !s.hasContent);
+    // Don't allow empty required sections
+    const hasEmptyRequiredSections = foundSections.some(s => 
+        s.found && !s.hasContent && requiredTypes.includes(s.type)
+    );
 
     // Basic format check - must have proper section formatting
     const hasSectionFormatting = /\[[^\]]+\]/.test(response);
     
-    return hasRequiredSections && hasSectionFormatting && !hasEmptySections;
+    return hasRequiredSections && hasSectionFormatting && !hasEmptyRequiredSections;
 }
 
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {

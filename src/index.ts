@@ -4,7 +4,8 @@ import {
     Events, 
     SlashCommandBuilder,
     REST,
-    IntentsBitField as Intents
+    IntentsBitField as Intents,
+    BaseGuildTextChannel
 } from 'discord.js';
 import { handleRegister } from './commands/register';
 import { handleHelp } from './commands/help';
@@ -29,6 +30,10 @@ import { handleDisconnectVoice } from './commands/adventure';
 import { cleanupOldAudioFiles } from './utils/cleanup';
 import { logger } from './utils/logger';
 import { handleCombatAction } from './combat/handlers/commands';
+import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel } from './types/game';
+import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
+import { getAdventureMemory } from './commands/adventure/action';
+import { generateResponse } from './ai/gamemaster';
 
 dotenv.config();
 
@@ -555,6 +560,162 @@ client.on(Events.InteractionCreate, async interaction => {
         } catch (error) {
             console.error('Error in autocomplete:', error);
             await interaction.respond([]);
+        }
+    }
+
+    if (interaction.isButton()) {
+        try {
+            if (interaction.customId.startsWith('action:')) {
+                await interaction.deferReply();
+                const action = interaction.customId.replace('action:', '');
+                
+                // Get the user's active adventure
+                const userAdventure = await prisma.adventure.findFirst({
+                    where: { 
+                        status: 'ACTIVE',
+                        players: {
+                            some: {
+                                character: {
+                                    user: {
+                                        discordId: interaction.user.id
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    include: {
+                        players: {
+                            include: {
+                                character: {
+                                    include: {
+                                        user: true,
+                                        spells: true,
+                                        abilities: true,
+                                        inventory: true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                if (!userAdventure) {
+                    await interaction.editReply({
+                        content: 'You need to be in an active adventure to perform actions.',
+                    });
+                    return;
+                }
+
+                // Find the user's character in this adventure
+                const userCharacter = userAdventure.players.find(
+                    p => p.character.user.discordId === interaction.user.id
+                )?.character;
+
+                if (!userCharacter) {
+                    await interaction.editReply({
+                        content: 'Character not found in this adventure.',
+                    });
+                    return;
+                }
+
+                // Create game context
+                const context: GameContext = {
+                    scene: '',  // Will be populated from memory
+                    playerActions: [action],
+                    characters: userAdventure.players.map(p => toGameCharacter(p.character)),
+                    currentState: {
+                        health: userCharacter.health,
+                        mana: userCharacter.mana,
+                        inventory: [],
+                        questProgress: userAdventure.status
+                    },
+                    language: userAdventure.language as SupportedLanguage || 'en-US',
+                    adventureSettings: {
+                        worldStyle: userAdventure.worldStyle as WorldStyle,
+                        toneStyle: userAdventure.toneStyle as ToneStyle,
+                        magicLevel: userAdventure.magicLevel as MagicLevel,
+                        setting: userAdventure.setting || undefined
+                    },
+                    memory: await getAdventureMemory(userAdventure.id)
+                };
+
+                // Generate AI response
+                const response = await generateResponse(context);
+
+                // Process the response using the existing handler
+                const channel = interaction.channel;
+                if (!channel || !(channel instanceof BaseGuildTextChannel)) {
+                    await interaction.editReply({
+                        content: 'This command can only be used in a server text channel.',
+                    });
+                    return;
+                }
+
+                // Extract and process sections (reuse the existing section processing logic)
+                const sections = response.split(/\[(?=[A-Z])/);
+                
+                // Group sections by type (same as in handlePlayerAction)
+                const narrativeSections = sections.filter(section => 
+                    section.startsWith('Narration') || 
+                    section.startsWith('Narração') || 
+                    section.startsWith('Dialogue') || 
+                    section.startsWith('Diálogo') || 
+                    section.startsWith('Atmosphere') ||
+                    section.startsWith('Atmosfera')
+                ).map(section => {
+                    const cleanedSection = section.trim()
+                        .replace(/Characters Present:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Current Status:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Recent Events:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Active Quests:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Known Characters:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Discovered Locations:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/Important Items:[\s\S]*?(?=\[|$)/, '')
+                        .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
+                        .replace(/\[\]}}.*$/, '')
+                        .replace(/The beginning of a new adventure.*$/, '');
+                    return `[${cleanedSection}`;
+                });
+
+                const uniqueNarrativeSections = Array.from(new Set(narrativeSections));
+                const narrativeContent = uniqueNarrativeSections.join('\n\n');
+
+                // Send the player's action
+                await channel.send({
+                    content: `🎭 **${userCharacter.name}**: ${action}`,
+                    tts: false
+                });
+
+                // Send the narrative content
+                if (narrativeContent) {
+                    await channel.send({
+                        content: narrativeContent,
+                        tts: userAdventure.voiceType === 'discord'
+                    });
+                }
+
+                // Create and send new action buttons
+                const suggestedActions = extractSuggestedActions(response, context.language);
+                const actionButtons = createActionButtons(suggestedActions);
+                
+                if (actionButtons.length > 0) {
+                    await channel.send({
+                        content: context.language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
+                        components: actionButtons,
+                        tts: false
+                    });
+                }
+
+                await interaction.editReply({
+                    content: '✨ Ação processada!'
+                });
+            }
+        } catch (error) {
+            logger.error('Error handling button interaction:', error);
+            await interaction.reply({ 
+                content: 'There was an error processing your action.', 
+                ephemeral: true 
+            });
         }
     }
 

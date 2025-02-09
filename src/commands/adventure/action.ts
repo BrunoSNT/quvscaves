@@ -45,7 +45,7 @@ type AdventurePlayerWithCharacter = {
     }
 };
 
-function parseEffects(effectsText: string): ParsedEffects {
+export function parseEffects(effectsText: string): ParsedEffects {
     const effects: StatusEffect[] = [];
     const result: ParsedEffects = { 
         statusEffects: effects, 
@@ -129,7 +129,7 @@ function determineEffectType(effectName: string): 'positive' | 'negative' | 'neu
     return 'neutral';
 }
 
-function toGameCharacter(dbChar: any): Character {
+export function toGameCharacter(dbChar: any): Character {
     return {
         id: dbChar.id,
         name: dbChar.name,
@@ -158,7 +158,7 @@ function toGameCharacter(dbChar: any): Character {
     };
 }
 
-async function getAdventureMemory(adventureId: string) {
+export async function getAdventureMemory(adventureId: string) {
     // Get current scene and recent scenes
     const scenes = await prisma.scene.findMany({
         where: { adventureId },
@@ -175,6 +175,11 @@ async function getAdventureMemory(adventureId: string) {
         orderBy: { updatedAt: 'desc' }
     });
 
+    // Helper function to clean section tags
+    const cleanSectionTags = (text: string) => {
+        return text.replace(/\[(Narration|Atmosphere|Dialogue|Effects|Actions|Memory)\]\s*/g, '');
+    };
+
     // Organize memories by type
     const significantMemories = memories.filter(m => m.importance >= 4);
     const activeQuests = memories.filter(m => m.type === 'QUEST' && m.status === 'ACTIVE');
@@ -184,8 +189,8 @@ async function getAdventureMemory(adventureId: string) {
 
     return {
         currentScene: scenes[0] ? {
-            description: scenes[0].description,
-            summary: scenes[0].summary,
+            description: cleanSectionTags(scenes[0].description),
+            summary: cleanSectionTags(scenes[0].summary),
             keyEvents: scenes[0].keyEvents,
             npcInteractions: scenes[0].npcInteractions ? JSON.parse(scenes[0].npcInteractions as string) : {},
             decisions: scenes[0].decisions ? JSON.parse(scenes[0].decisions as string) : [],
@@ -201,8 +206,8 @@ async function getAdventureMemory(adventureId: string) {
             locationContext: ''
         },
         recentScenes: scenes.slice(1).map(scene => ({
-            description: scene.description,
-            summary: scene.summary,
+            description: cleanSectionTags(scene.description),
+            summary: cleanSectionTags(scene.summary),
             keyEvents: scene.keyEvents,
             npcInteractions: scene.npcInteractions ? JSON.parse(scene.npcInteractions as string) : {},
             decisions: scene.decisions ? JSON.parse(scene.decisions as string) : [],
@@ -274,7 +279,7 @@ async function updateAdventureMemory(adventureId: string, aiResponse: string) {
     }
 }
 
-function extractSuggestedActions(response: string, language: SupportedLanguage): string[] {
+export function extractSuggestedActions(response: string, language: SupportedLanguage): string[] {
     const actionSection = language === 'pt-BR' 
         ? /\[(?:Sugestões de Ação|Ações Disponíveis|Ações)\](.*?)(?=\[|$)/s
         : /\[(?:Available Actions|Actions|Suggested Actions)\](.*?)(?=\[|$)/s;
@@ -289,7 +294,7 @@ function extractSuggestedActions(response: string, language: SupportedLanguage):
         .filter(action => action.length > 0);
 }
 
-function createActionButtons(actions: string[]): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
+export function createActionButtons(actions: string[]): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
     const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
     
     // Create buttons in groups of 5 (Discord's limit per row)
@@ -297,11 +302,12 @@ function createActionButtons(actions: string[]): ActionRowBuilder<MessageActionR
         const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
         const groupActions = actions.slice(i, i + 5);
         
-        groupActions.forEach((action, index) => {
+        groupActions.forEach((action) => {
+            const buttonLabel = action.length > 80 ? action.substring(0, 77) + '...' : action;
             row.addComponents(
                 new ButtonBuilder()
-                    .setCustomId(`action_${i + index}`)
-                    .setLabel(action.length > 80 ? action.substring(0, 77) + '...' : action)
+                    .setCustomId(`action:${action}`) // Store the full action in the custom ID
+                    .setLabel(buttonLabel)
                     .setStyle(ButtonStyle.Primary)
             );
         });
@@ -542,12 +548,6 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        // First send the player's action without TTS
-        await channel.send({
-            content: `🎭 **${userCharacter.name}**: ${action}`,
-            tts: false,
-        });
-
         // Extract sections
         const sections = response.split(/\[(?=[A-Z])/);
         
@@ -559,227 +559,87 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             section.startsWith('Diálogo') || 
             section.startsWith('Atmosphere') ||
             section.startsWith('Atmosfera')
-        ).map(section => `[${section.trim()}`);
+        ).map(section => {
+            // Clean up the section text to remove any metadata and malformed content
+            const cleanedSection = section.trim()
+                .replace(/Characters Present:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Current Status:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Recent Events:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Active Quests:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Known Characters:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Discovered Locations:[\s\S]*?(?=\[|$)/, '')
+                .replace(/Important Items:[\s\S]*?(?=\[|$)/, '')
+                .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
+                .replace(/\[\]}}.*$/, '') // Remove malformed JSON-like content
+                .replace(/The beginning of a new adventure.*$/, ''); // Remove redundant ending
+            return `[${cleanedSection}`;
+        });
 
-        const mechanicSections = sections.filter(section =>
-            section.startsWith('Suggested Choices') ||
-            section.startsWith('Sugestões de Ação') ||
+        // Remove duplicate narrative sections
+        const uniqueNarrativeSections = Array.from(new Set(narrativeSections));
+
+        const effectsSections = sections.filter(section =>
             section.startsWith('Effects') ||
             section.startsWith('Efeitos')
-        ).map(section => `[${section.trim()}`);
-
-        // Send narrative sections based on voice type
-        for (const section of narrativeSections) {
-            // Send text message
-            await channel.send({
-                content: section,
-                tts: userAdventure.voiceType === 'discord'
-            });
-
-            // Use ElevenLabs if selected
-            if (userAdventure.voiceType === 'elevenlabs' && userAdventure.categoryId) {
-                try {
-                    await speakInVoiceChannel(
-                        section.replace(/\[.*?\]/g, '').trim(),
-                        interaction.guild!,
-                        userAdventure.categoryId,
-                        userAdventure.id
-                    );
-                } catch (voiceError) {
-                    logger.error('Error in voice playback:', voiceError);
-                }
-            }
-            // No additional handling needed for text_only, as we already sent the text message
-        }
-
-        // Send mechanic sections without voice
-        if (mechanicSections.length > 0) {
-            await channel.send({
-                content: mechanicSections.join('\n\n'),
-                tts: false
-            });
-
-            // Parse effects from the [Effects] and [Combat Effects] sections
-            const effectsSection = mechanicSections.find(section => 
-                section.startsWith('[Effects]') || 
-                section.startsWith('[Efeitos]')
-            );
-
-            const combatEffectsSection = mechanicSections.find(section =>
-                section.startsWith('[Combat Effects]') ||
-                section.startsWith('[Efeitos de Combate]')
-            );
-
-            if (effectsSection || combatEffectsSection) {
-                const { 
-                    statusEffects, 
-                    healthChange, 
-                    manaChange, 
-                    experienceChange,
-                    absoluteHealth,
-                    absoluteMana,
-                    combatAction
-                } = parseEffects(effectsSection + '\n' + (combatEffectsSection || ''));
-                
-                // Handle combat state changes
-                if (combatAction === 'start') {
-                    const combat = await prisma.combat.findFirst({
-                        where: {
-                            adventureId: userAdventure.id,
-                            status: 'ACTIVE'
-                        }
-                    });
-
-                    if (!combat) {
-                        const playerCharacters = userAdventure.players.map(p => toGameCharacter(p.character));
-                        const combatManager = await CombatManager.initiateCombat(userAdventure.id, playerCharacters);
-                        const state = combatManager.getState();
-
-                        await prisma.combat.create({
-                            data: {
-                                adventureId: state.adventureId,
-                                round: state.round,
-                                currentTurn: state.currentTurn,
-                                status: state.status,
-                                participants: {
-                                    create: state.participants.map(p => ({
-                                        characterId: p.characterId,
-                                        initiative: p.initiative,
-                                        isNPC: p.isNPC || false
-                                    }))
-                                }
-                            }
-                        });
-                    }
-                } else if (combatAction === 'end') {
-                    await prisma.combat.updateMany({
-                        where: {
-                            adventureId: userAdventure.id,
-                            status: 'ACTIVE'
-                        },
-                        data: {
-                            status: 'COMPLETED'
-                        }
-                    });
-                }
-
-                // Update character stats if needed
-                if (healthChange || manaChange || experienceChange || absoluteHealth !== undefined || absoluteMana !== undefined) {
-                    const updateData: any = {};
-                    
-                    // Handle health changes
-                    if (absoluteHealth !== undefined) {
-                        updateData.health = Math.min(absoluteHealth, userCharacter.maxHealth);
-                    } else if (healthChange) {
-                        updateData.health = Math.min(
-                            userCharacter.maxHealth,
-                            Math.max(0, userCharacter.health + healthChange)
-                        );
-                    }
-                    
-                    // Handle mana changes
-                    if (absoluteMana !== undefined) {
-                        updateData.mana = Math.min(absoluteMana, userCharacter.maxMana);
-                    } else if (manaChange) {
-                        updateData.mana = Math.min(
-                            userCharacter.maxMana,
-                            Math.max(0, userCharacter.mana + manaChange)
-                        );
-                    }
-
-                    // Handle experience changes
-                    if (experienceChange) {
-                        updateData.experience = Math.max(0, userCharacter.experience + experienceChange);
-                    }
-
-                    // Update character in database
-                    const updatedCharacter = await prisma.character.update({
-                        where: { id: userCharacter.id },
-                        data: updateData
-                    });
-                    
-                    // Update local character object
-                    Object.assign(userCharacter, updatedCharacter);
-                }
-
-                // Find and update character sheet
-                const characterChannel = interaction.guild!.channels.cache.find(
-                    channel => 
-                        channel.name === userCharacter.name.toLowerCase().replace(/\s+/g, '-') &&
-                        channel.parentId === userAdventure.categoryId
-                ) as TextChannel;
-
-                if (characterChannel) {
-                    await updateCharacterSheet(userCharacter, characterChannel, statusEffects);
-                }
-            }
-        }
+        ).map(section => {
+            // Clean up effects section
+            const cleanedSection = section.trim()
+                .replace(/\[tool_call\][\s\S]*?(?=\[|$)/, '')
+                .replace(/\[\]}}.*$/, '');
+            return `[${cleanedSection}`;
+        });
 
         // Extract suggested actions and create buttons
         const suggestedActions = extractSuggestedActions(response, context.language);
         const actionButtons = createActionButtons(suggestedActions);
 
-        // Send the response with action buttons
-        const responseMessage = await interaction.reply({
-            content: response,
-            components: actionButtons,
-            ephemeral: false,
-            fetchReply: true
+        // Combine narrative sections into a single message
+        const narrativeContent = uniqueNarrativeSections.join('\n\n');
+        const effectsContent = effectsSections.join('\n\n');
+
+        // First send the player's action
+        await channel.send({
+            content: `🎭 **${userCharacter.name}**: ${action}`,
+            tts: false
         });
 
-        // Add button collector
-        const collector = responseMessage.createMessageComponentCollector({ 
-            time: 15 * 60 * 1000 // 15 minutes
-        });
+        // Send the combined narrative content
+        if (narrativeContent) {
+            await channel.send({
+                content: narrativeContent,
+                tts: userAdventure.voiceType === 'discord'
+            });
+        }
 
-        collector.on('collect', async i => {
-            try {
-                // Get the selected action
-                const actionIndex = parseInt(i.customId.replace('action_', ''));
-                const selectedAction = suggestedActions[actionIndex];
+        // Send effects content if present
+        if (effectsContent) {
+            await channel.send({
+                content: effectsContent,
+                tts: false
+            });
+        }
 
-                // Create a new action interaction
-                const actionInteraction = {
-                    ...i,
-                    commandName: 'action',
-                    options: {
-                        getString: (name: string) => {
-                            if (name === 'description') return selectedAction;
-                            if (name === 'adventureId') return userAdventure.id;
-                            return null;
-                        }
-                    }
-                };
-
-                // Handle the action
-                await handlePlayerAction(actionInteraction as any);
-
-                // Remove buttons from the original message
-                await responseMessage.edit({
-                    components: []
-                });
-
-            } catch (error) {
-                logger.error('Error handling action button:', error);
-                await i.reply({
-                    content: context.language === 'pt-BR'
-                        ? 'Erro ao processar a ação. Por favor, tente novamente usando o comando `/action`.'
-                        : 'Error processing action. Please try again using the `/action` command.',
-                    ephemeral: true
-                });
-            }
-        });
+        // Send action buttons in a separate message
+        if (actionButtons.length > 0) {
+            await channel.send({
+                content: context.language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
+                components: actionButtons,
+                tts: false
+            });
+        }
 
         // Voice playback if enabled
-        if (userAdventure.categoryId) {
-            await speakInVoiceChannel(
-                response,
-                interaction.guild!,
-                userAdventure.categoryId,
-                userAdventure.id
-            ).catch(error => {
-                logger.error('Error in voice playback:', error);
-            });
+        if (userAdventure.categoryId && userAdventure.voiceType === 'elevenlabs') {
+            try {
+                await speakInVoiceChannel(
+                    narrativeContent,
+                    interaction.guild!,
+                    userAdventure.categoryId,
+                    userAdventure.id
+                );
+            } catch (voiceError) {
+                logger.error('Error in voice playback:', voiceError);
+            }
         }
 
         // Update the deferred reply
