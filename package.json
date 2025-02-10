@@ -8,14 +8,17 @@
     "clean:prisma": "rm -rf node_modules/.prisma",
     "prebuild": "pnpm run clean:dist",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
-    "dev:debug": "tsx --inspect src/index.ts",
+    "start": "python3 tts/init_model.py && node dist/index.js",
+    "dev": "python3 tts/init_model.py && tsx watch src/index.ts",
+    "dev:debug": "python3 tts/init_model.py && tsx --inspect src/index.ts",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
-    "setup": "pnpm run clean && pnpm install && pnpm run prisma:generate && pnpm run build",
-    "restart": "pnpm run clean:dist && pnpm run build && pnpm run start"
+    "setup": "pnpm run clean && pnpm install && cd tts && pip3 install -r requirements.txt && python3 download_models.py && cd .. && pnpm run prisma:generate && pnpm run build",
+    "restart": "pnpm run clean:dist && pnpm run build && pnpm run start",
+    "tts:init": "python3 tts/init_model.py",
+    "tts:download": "python3 tts/download_models.py",
+    "tts:check": "python3 tts/check_models.py"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
