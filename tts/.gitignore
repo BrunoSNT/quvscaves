@@ -165,7 +165,7 @@ cython_debug/
 # MacOS System
 .DS_Store
 
-# assets and configs of ChatTTS
+# assets and configs of TSS
 /asset
 /config
 

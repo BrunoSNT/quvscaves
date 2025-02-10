@@ -14,7 +14,7 @@ import { Guild, VoiceChannel, ChannelType, CategoryChannel } from 'discord.js';
 import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import axios from 'axios';
-import { generateChatTTSAudio } from './voice/chattts';
+import { generateTTSAudio } from './voice/tts';
 import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -81,7 +81,7 @@ function getKokoroVoiceForLanguage(language: string): KokoroVoice {
         case 'it':
             return 'if_heart';
         default:
-            return 'af_heart'; // Default to English
+            return 'am_adam'; // Default to English
     }
 }
 
@@ -187,7 +187,7 @@ export async function speakInVoiceChannel(
                 // Use Kokoro with language-appropriate voice
                 const kokoroVoice = getKokoroVoiceForLanguage(language);
                 logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
-                audioPath = await generateChatTTSAudio(text, {
+                audioPath = await generateTTSAudio(text, {
                     engine: 'kokoro',
                     voice: kokoroVoice,
                     speed: 1.0
@@ -198,7 +198,7 @@ export async function speakInVoiceChannel(
             default:
                 logger.warn(`Unsupported voice type: ${voiceType}, falling back to Kokoro`);
                 const kokoroVoice = getKokoroVoiceForLanguage(language);
-                audioPath = await generateChatTTSAudio(text, {
+                audioPath = await generateTTSAudio(text, {
                     engine: 'kokoro',
                     voice: kokoroVoice,
                     speed: 1.0

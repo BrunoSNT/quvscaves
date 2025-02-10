@@ -690,7 +690,7 @@ client.on(Events.InteractionCreate, async interaction => {
                                 interaction.guild!,
                                 userAdventure.categoryId,
                                 userAdventure.id,
-                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'chattts' as VoiceType
+                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'kokoro' as VoiceType
                             );
                         } else {
                             logger.debug('No narrative sections found for voice playback');

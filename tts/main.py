@@ -108,18 +108,16 @@ async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str]
     logger.info(f"Generating audio with Kokoro")
     try:
         timestamp = int(time.time())
-        output_filename = f"output_audio_{timestamp}.mp3"
+        output_filename = f"output_audio_{timestamp}.wav"
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
         output_path = os.path.join(output_dir, output_filename)
-        wav_path = output_path.replace('.mp3', '.wav')
 
         # Ensure output directory exists with proper permissions
         os.makedirs(output_dir, exist_ok=True)
         os.chmod(output_dir, 0o755)  # rwxr-xr-x
         
         logger.info(f"Directory: {output_dir}")
-        logger.info(f"WAV path: {wav_path}")
-        logger.info(f"MP3 path: {output_path}")
+        logger.info(f"WAV path: {output_path}")
 
         # Initialize and use Kokoro for generation
         pipeline = tts_engine.get_kokoro()  # This will initialize only Kokoro if needed
@@ -150,38 +148,16 @@ async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str]
             combined_audio = audio_chunks[0]
             logger.info(f"Single Chunk - Length: {len(combined_audio)}")
         
-        # Save as WAV first (Kokoro's native format)
-        logger.info(f"Saving WAV file to: {wav_path}")
-        sf.write(wav_path, combined_audio, 24000)
+        # Save WAV file
+        logger.info(f"Saving WAV file to: {output_path}")
+        sf.write(output_path, combined_audio, 24000)
         
         # Verify WAV file exists and has content
-        if not os.path.exists(wav_path):
-            raise RuntimeError(f"Failed to save WAV file at {wav_path}")
-        
-        wav_size = os.path.getsize(wav_path)
-        logger.info(f"WAV file created successfully, size: {wav_size} bytes")
-
-        # Convert to MP3
-        logger.info(f"Converting to MP3: {output_path}")
-        audio_segment = AudioSegment.from_wav(wav_path)
-        audio_segment.export(
-            output_path,
-            format="mp3",
-            bitrate="192k",
-            parameters=[
-                "-ac", "1",
-                "-ar", "24000",
-                "-b:a", "192k",
-                "-joint_stereo", "0"
-            ]
-        )
-
-        # Verify MP3 file exists and has content
         if not os.path.exists(output_path):
-            raise RuntimeError(f"Failed to create MP3 file at {output_path}")
+            raise RuntimeError(f"Failed to save WAV file at {output_path}")
         
-        mp3_size = os.path.getsize(output_path)
-        logger.info(f"MP3 file created successfully, size: {mp3_size} bytes")
+        wav_size = os.path.getsize(output_path)
+        logger.info(f"WAV file created successfully, size: {wav_size} bytes")
 
         return output_path
 
@@ -215,7 +191,7 @@ async def text_to_speech(request: TTSRequest):
         # Return audio file
         return FileResponse(
             output_path,
-            media_type="audio/mpeg",
+            media_type="audio/wav",
             headers={"Content-Disposition": f"attachment; filename={os.path.basename(output_path)}"}
         )
         

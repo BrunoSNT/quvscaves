@@ -14,14 +14,14 @@ export type TTSEngine = 'kokoro';
 
 // Kokoro voice options
 export const KOKORO_VOICES = {
-    english: ['af_heart', 'af_soul', 'af_mind', 'af_spirit'],
+    english: ['am_adam', 'af_heart', 'af_soul', 'af_mind', 'af_spirit'],
     spanish: ['ef_heart', 'ef_soul'],
     french: ['ff_heart', 'ff_soul'],
     japanese: ['jf_heart', 'jf_soul'],
     chinese: ['zf_heart', 'zf_soul'],
     hindi: ['hf_heart', 'hf_soul'],
     italian: ['if_heart', 'if_soul'],
-    portuguese: ['pf_heart', 'pf_soul']
+    portuguese: ['pm_adam', 'pf_heart', 'pm_soul', 'pf_soul']
 } as const;
 
 interface TTSOptions {
@@ -88,7 +88,7 @@ async function startServer(): Promise<boolean> {
     }
 }
 
-export async function generateChatTTSAudio(text: string, options: TTSOptions = {}): Promise<string> {
+export async function generateTTSAudio(text: string, options: TTSOptions = {}): Promise<string> {
     try {
         // Ensure server is running
         const serverStarted = await startServer();
@@ -99,7 +99,7 @@ export async function generateChatTTSAudio(text: string, options: TTSOptions = {
         // Generate temporary file path
         const timestamp = Date.now();
         const outputDir = join(process.cwd(), 'tts', 'output');
-        const outputPath = join(outputDir, `output_audio_${timestamp}.mp3`);
+        const outputPath = join(outputDir, `output_audio_${timestamp}.wav`);
 
         // Create output directory if it doesn't exist
         const { mkdir } = require('fs/promises');
@@ -115,7 +115,10 @@ export async function generateChatTTSAudio(text: string, options: TTSOptions = {
                 voice: options.voice || 'af_heart',
                 speed: options.speed || 1.0
             },
-            responseType: 'arraybuffer'
+            responseType: 'arraybuffer',
+            headers: {
+                'Accept': 'audio/wav'
+            }
         });
 
         // Save the audio file
@@ -129,13 +132,13 @@ export async function generateChatTTSAudio(text: string, options: TTSOptions = {
 
     } catch (error) {
         if (error instanceof AxiosError) {
-            logger.error('Network error in generateChatTTSAudio:', {
+            logger.error('Network error in generateTTSAudio:', {
                 status: error.response?.status,
                 data: error.response?.data,
                 message: error.message
             });
         } else {
-            logger.error('Error in generateChatTTSAudio:', error);
+            logger.error('Error in generateTTSAudio:', error);
         }
         throw error;
     }
