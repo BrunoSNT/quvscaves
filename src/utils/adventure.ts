@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageActionRowComponentBuilder, TextChannel } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, MessageActionRowComponentBuilder, TextChannel, Guild, VoiceBasedChannel } from 'discord.js';
 import { prisma } from '../lib/prisma';
 import { updateCharacterSheet } from './index';
 import { CombatManager } from '../combat/manager';
@@ -300,4 +300,24 @@ export async function updateAdventureMemory(adventureId: string, aiResponse: str
     } catch (error) {
         logger.error('Error updating scene memory', { error: error instanceof Error ? error.message : error });
     }
+}
+
+export async function speakInVoiceChannel(
+    text: string,
+    guild: Guild,
+    channelId: string,
+    adventureId: string,
+    voiceType: 'elevenlabs' | 'chattts' = 'chattts'
+): Promise<void> {
+    // Get the channel using the stored voice channel ID
+    const voiceChannel = guild.channels.cache.get(channelId);
+    if (!voiceChannel || !voiceChannel.isVoiceBased()) {
+        throw new Error('Invalid voice channel');
+    }
+
+    // Continue with your voice connection logic here
+    // For example, connect to the channel and play the text:
+    // const connection = joinVoiceChannel({ ... });
+    // const audioResource = createAudioResource(text, { ... });
+    // connection.play(audioResource);
 } 

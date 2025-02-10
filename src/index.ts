@@ -28,12 +28,22 @@ import { handleAdventureSettings } from './commands/adventure';
 import dotenv from 'dotenv';
 import { handleDisconnectVoice } from './commands/adventure';
 import { logger } from './utils/logger';
-import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel } from './types/game';
+import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel, VoiceType } from './types/game';
 import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
 import { getAdventureMemory } from './commands/adventure/action';
 import { generateResponse } from './ai/gamemaster';
 import { getMessages } from './utils/language';
 import { sendFormattedResponse } from './utils/discord/embeds';
+import { speakInVoiceChannel } from './lib/voice';
+import chalk from 'chalk';
+
+// Suppress punycode deprecation warning
+process.removeAllListeners('warning');
+process.on('warning', (warning) => {
+    if (warning.name !== 'DeprecationWarning' || !warning.message.includes('punycode')) {
+        console.warn(warning);
+    }
+});
 
 dotenv.config();
 
@@ -225,7 +235,7 @@ const commands = [
 ].map(command => command.toJSON());
 
 client.once(Events.ClientReady, async (c) => {
-    logger.info(`Ready! Logged in as ${c.user.tag}`);
+   logger.info(`Ready! Logged in as ${c.user.tag}`);
     
     const rest = new REST().setToken(process.env.DISCORD_TOKEN!);
     try {
@@ -649,8 +659,51 @@ client.on(Events.InteractionCreate, async interaction => {
                     action,
                     response,
                     language: userAdventure.language as SupportedLanguage,
-                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs'
+                    voiceType: userAdventure.voiceType as VoiceType
                 });
+
+                // Voice playback if enabled
+                if (userAdventure.categoryId && userAdventure.voiceType !== 'none') {
+                    try {
+                        // Extract narrative sections for voice
+                        const sections = response.split(/\[(?=[A-Z])/);
+                        const narrativeSections = sections.filter(section => 
+                            section.startsWith('Narration') || 
+                            section.startsWith('Narração') || 
+                            section.startsWith('Atmosphere') ||
+                            section.startsWith('Atmosfera')
+                        ).map(section => {
+                            // Clean up the section text
+                            return section.replace(/^(Narration|Narração|Atmosphere|Atmosfera)\]/, '').trim();
+                        });
+
+                        // Combine narrative sections for voice playback
+                        const voiceText = narrativeSections.join('\n\n');
+                        if (voiceText) {
+                            logger.debug('Starting voice playback with text:', {
+                                textLength: voiceText.length,
+                                voiceType: userAdventure.voiceType
+                            });
+
+                            await speakInVoiceChannel(
+                                voiceText,
+                                interaction.guild!,
+                                userAdventure.categoryId,
+                                userAdventure.id,
+                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'chattts'
+                            );
+                        } else {
+                            logger.debug('No narrative sections found for voice playback');
+                        }
+                    } catch (voiceError) {
+                        logger.error('Error in voice playback:', voiceError);
+                    }
+                } else {
+                    logger.debug('Voice playback skipped:', {
+                        hasCategory: !!userAdventure.categoryId,
+                        voiceType: userAdventure.voiceType
+                    });
+                }
 
                 await interaction.editReply({
                     content: '✨ Ação processada!'

@@ -7,16 +7,24 @@ import {
     getVoiceConnection,
     joinVoiceChannel,
     StreamType,
-    VoiceConnection
+    VoiceConnection,
+    NoSubscriberBehavior
 } from '@discordjs/voice';
-import { Guild, VoiceChannel, CategoryChannel, ChannelType } from 'discord.js';
+import { Guild, VoiceChannel, ChannelType, CategoryChannel } from 'discord.js';
 import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import axios from 'axios';
+import { generateChatTTSAudio } from './voice/chattts';
+import { join } from 'path';
+import { unlink } from 'fs/promises';
+import { existsSync } from 'fs';
 
 // Keep track of active connections and players
 const activeConnections = new Map<string, VoiceConnection>();
 const activePlayers = new Map<string, AudioPlayer>();
+
+const DISCONNECT_TIMEOUT = 15 * 60 * 1000; // 15 minutes
+const disconnectTimers = new Map<string, NodeJS.Timeout>();
 
 // Function to get audio from ElevenLabs
 async function getAudioFromElevenLabs(text: string): Promise<Buffer | null> {
@@ -72,141 +80,118 @@ export async function speakInVoiceChannel(
     text: string,
     guild: Guild,
     categoryId: string,
-    adventureId: string
-): Promise<void> {
+    adventureId: string,
+    voiceType: 'elevenlabs' | 'chattts' = 'chattts'
+) {
+    let connection: VoiceConnection | null = null;
+    let audioPath: string | null = null;
+    let player: AudioPlayer | null = null;
+
     try {
-        const apiKey = process.env.ELEVENLABS_API_KEY;
-        if (!apiKey) {
-            logger.warn('No ElevenLabs API key found in environment variables');
-            return;
+        // Find the Table voice channel
+        const category = await guild.channels.fetch(categoryId) as CategoryChannel | null;
+        if (!category) {
+            throw new Error('Adventure category not found');
         }
 
-        logger.debug('Starting voice generation with params:', {
-            guildId: guild.id,
-            categoryId,
-            adventureId,
-            textLength: text.length
-        });
+        const channels = await guild.channels.fetch();
+        const tableChannel = channels.find(
+            channel =>
+                channel?.parentId === categoryId &&
+                channel?.name.toLowerCase() === 'table' &&
+                channel?.type === ChannelType.GuildVoice
+        ) as VoiceChannel | undefined;
 
-        const voiceChannelName = `${adventureId}-voice`;
-        let voiceChannel = guild.channels.cache.find(
-            (channel): channel is VoiceChannel =>
-                channel.name === voiceChannelName &&
-                channel.type === ChannelType.GuildVoice
-        );
-
-        if (!voiceChannel) {
-            logger.debug('Voice channel not found, creating new one');
-            voiceChannel = await createVoiceChannel(guild, categoryId, voiceChannelName);
+        if (!tableChannel) {
+            throw new Error('Table voice channel not found');
         }
 
-        // Safety check
-        if (!voiceChannel) {
-            logger.error('Failed to create or find voice channel');
-            return;
-        }
-
-        logger.debug('Getting audio from ElevenLabs');
-        const audioBuffer = await getAudioFromElevenLabs(text).catch(error => {
-            if (axios.isAxiosError(error)) {
-                logger.error('ElevenLabs API error:', {
-                    status: error.response?.status,
-                    statusText: error.response?.statusText,
-                    data: error.response?.data,
-                    message: error.message
-                });
-            } else {
-                logger.error('Error getting audio from ElevenLabs:', error);
-            }
-            return null;
-        });
-
-        if (!audioBuffer) {
-            logger.warn('No audio generated, skipping voice playback');
-            return;
-        }
-
-        logger.debug('Joining voice channel');
-        const connection = joinVoiceChannel({
-            channelId: voiceChannel.id,
+        // Join voice channel
+        connection = joinVoiceChannel({
+            channelId: tableChannel.id,
             guildId: guild.id,
             adapterCreator: guild.voiceAdapterCreator,
-            selfDeaf: false
+            selfDeaf: false,
+            selfMute: false
         });
 
-        const player = createAudioPlayer();
+        // Create and set up audio player
+        player = createAudioPlayer({
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play,
+                maxMissedFrames: 50
+            }
+        });
+        
         connection.subscribe(player);
 
-        // Store the active connection and player
-        activeConnections.set(guild.id, connection);
-        activePlayers.set(guild.id, player);
+        // Generate audio
+        audioPath = await generateChatTTSAudio(text);
+        if (!audioPath || !existsSync(audioPath)) {
+            throw new Error('Failed to generate audio file');
+        }
 
-        logger.debug('Creating audio resource');
-        const resource = createAudioResource(Readable.from(audioBuffer));
-        
-        // Add state change logging
-        player.on(AudioPlayerStatus.Playing, () => {
-            logger.debug('Audio player started playing');
+        // Play audio
+        const resource = createAudioResource(audioPath, {
+            inputType: StreamType.Arbitrary,
+            inlineVolume: true
         });
 
-        player.on(AudioPlayerStatus.Idle, () => {
-            logger.debug('Audio player finished playing');
-            // Cleanup after playback
-            activePlayers.delete(guild.id);
-            connection.destroy();
-            activeConnections.delete(guild.id);
-        });
+        if (resource.volume) {
+            resource.volume.setVolume(1.0);
+        }
 
-        // Handle connection errors
-        connection.on('error', error => {
-            logger.error('Error in voice connection:', {
-                error: error.message,
-                name: error.name,
-                stack: error.stack
-            });
-            activeConnections.delete(guild.id);
-            activePlayers.delete(guild.id);
-        });
-
-        // Handle player errors
-        player.on('error', error => {
-            logger.error('Error in audio player:', {
-                error: error.message,
-                name: error.name,
-                stack: error.stack
-            });
-            activePlayers.delete(guild.id);
-        });
-
-        logger.debug('Starting playback');
         player.play(resource);
 
-    } catch (error) {
-        if (error instanceof Error) {
-            logger.error('Error in voice playback:', {
-                error: error.message,
-                name: error.name,
-                stack: error.stack
+        // Wait for playback to complete
+        await new Promise((resolve) => {
+            player!.on(AudioPlayerStatus.Playing, () => {
+                logger.debug('Audio playback started');
             });
-        } else {
-            logger.error('Unknown error in voice playback:', error);
+
+            player!.on(AudioPlayerStatus.Idle, () => {
+                resolve(true);
+            });
+        });
+
+        // Set disconnect timer
+        if (disconnectTimers.has(adventureId)) {
+            clearTimeout(disconnectTimers.get(adventureId)!);
         }
-        // Don't throw the error up - just log it and continue
+
+        disconnectTimers.set(adventureId, setTimeout(() => {
+            const conn = getVoiceConnection(guild.id);
+            if (conn) {
+                conn.destroy();
+                disconnectTimers.delete(adventureId);
+            }
+        }, DISCONNECT_TIMEOUT));
+
+    } catch (error) {
+        // Clean up on error
+        if (audioPath && existsSync(audioPath)) {
+            try {
+                await unlink(audioPath);
+            } catch (cleanupError) {
+                logger.error('Error cleaning up audio file:', cleanupError);
+            }
+        }
+
+        if (player) {
+            player.stop();
+        }
+
+        if (connection) {
+            connection.destroy();
+        }
+
+        throw error;
     }
 }
 
-// Add a function to manually disconnect
-export function disconnectVoice(guildId: string) {
-    const connection = activeConnections.get(guildId);
-    const player = activePlayers.get(guildId);
-    
-    if (player) {
-        player.stop();
-        activePlayers.delete(guildId);
-    }
-    
+export function disconnectFromVoice(guildId: string) {
+    const connection = getVoiceConnection(guildId);
     if (connection) {
         connection.destroy();
-        activeConnections.delete(guildId);
     }
 } 

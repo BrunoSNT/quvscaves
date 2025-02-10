@@ -194,7 +194,7 @@ export async function sendFormattedResponse({
     action: string;
     response: string;
     language: SupportedLanguage;
-    voiceType?: 'discord' | 'elevenlabs' | 'none';
+    voiceType?: 'none' | 'discord' | 'elevenlabs' | 'chattts';
 }) {
     // First send the player's action
     await channel.send({
@@ -265,7 +265,7 @@ export async function sendFormattedResponse({
     if (sections.actions.length > 0) {
         const actionButtons = createActionButtons(sections.actions);
         await channel.send({
-            content: language === 'pt-BR' ? '**Ações Disponíveis:**' : '**Available Actions:**',
+            content: language === 'pt-BR' ? '**Ações Sugeridas:**' : '**Suggested Actions:**',
             components: actionButtons,
             tts: false
         });

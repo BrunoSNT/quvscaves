@@ -1,3 +1,5 @@
+import chalk from "chalk";
+
 export interface Logger {
     info(message: string, ...args: any[]): void;
     warn(message: string, ...args: any[]): void;
@@ -18,7 +20,7 @@ class LoggerImpl implements Logger {
             ).join(' ')
             : '';
 
-        console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}${formattedArgs ? ' ' + formattedArgs : ''}`);
+        console.log(`${chalk.gray([timestamp])} ${ level === 'info' ? "[" + chalk.blue(level.toUpperCase()) + "]" : level === 'warn' ? chalk.bgYellow("[" + chalk.white(level.toUpperCase()) + "]") : "[" + chalk.black(level.toUpperCase()) + "]"} ${message}${formattedArgs ? ' ' + formattedArgs : ''}`);
     }
 
     info(message: string, ...args: any[]): void {

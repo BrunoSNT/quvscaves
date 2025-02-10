@@ -295,6 +295,11 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                         .setPlaceholder('Choose voice type')
                         .addOptions([
                             {
+                                label: 'Text Only',
+                                value: 'none',
+                                description: 'No voice, just text narration'
+                            },
+                            {
                                 label: 'Discord TTS',
                                 value: 'discord',
                                 description: 'Use Discord\'s built-in Text-to-Speech'
@@ -305,9 +310,9 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                                 description: 'Use ElevenLabs for more natural voices'
                             },
                             {
-                                label: 'Text Only',
-                                value: 'text_only',
-                                description: 'No voice, just text narration'
+                                label: 'ChatTTS',
+                                value: 'chattts',
+                                description: 'Use ChatTTS for high-quality offline voices'
                             }
                         ])
                 );

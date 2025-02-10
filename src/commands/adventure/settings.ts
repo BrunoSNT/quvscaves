@@ -91,7 +91,7 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
         const setupMsg = await interaction.editReply({
             content: 'Adventure Settings\nCurrent settings:\n' +
                     `- Language: ${adventure.language === 'en-US' ? 'English (US)' : 'Português (Brasil)'}\n` +
-                    `- Voice Type: ${adventure.voiceType === 'discord' ? 'Discord TTS' : 'ElevenLabs'}\n` +
+                    `- Voice Type: ${adventure.voiceType === 'discord' ? 'Discord TTS' : adventure.voiceType === 'elevenlabs' ? 'ElevenLabs' : 'Text Only'}\n` +
                     `- World Style: ${adventure.worldStyle.replace(/_/g, ' ')}\n` +
                     `- Adventure Tone: ${adventure.toneStyle}\n` +
                     `- Magic Level: ${adventure.magicLevel}\n` +
@@ -137,6 +137,11 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
                                 .setPlaceholder('Choose voice type')
                                 .addOptions([
                                     {
+                                        label: 'Text Only',
+                                        value: 'none',
+                                        description: 'No voice generation'
+                                    },
+                                    {
                                         label: 'Discord TTS',
                                         value: 'discord',
                                         description: 'Use Discord\'s built-in Text-to-Speech'
@@ -145,6 +150,11 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
                                         label: 'ElevenLabs',
                                         value: 'elevenlabs',
                                         description: 'Use ElevenLabs for more natural voices'
+                                    },
+                                    {
+                                        label: 'ChatTTS',
+                                        value: 'chattts',
+                                        description: 'Use ChatTTS for high-quality offline voices'
                                     }
                                 ])
                         );

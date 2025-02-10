@@ -3,9 +3,11 @@ import { GameContext, SupportedLanguage } from '../types/game';
 import { logger } from '../utils/logger';
 import { getGamePrompt, buildContextString, createFallbackResponse } from '../utils/gamePrompts';
 import chalk from 'chalk';
+import ora from 'ora';
+import util from 'util';
 
 const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
-const AI_MODEL = 'qwen2.5:14b';
+const AI_MODEL = 'qwen2.5:3b';
 
 export interface AIResponse {
     response?: string;
@@ -66,19 +68,25 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 }
 
 export async function generateResponse(context: GameContext): Promise<string> {
+    const spinner = ora({
+        text: chalk.cyan('Generating AI response...'),
+        spinner: 'dots12'
+    }).start();
+
     try {
         const language = context.language;
         const prompt = getGamePrompt(language);
         const contextStr = buildContextString(context, language);
 
-        logger.debug(chalk.cyan('Generating AI response...'));
-        logger.debug(chalk.gray('Context:'), formatContext(context));
+        logger.debug(chalk.cyan('Context:'), formatContext(context));
 
         logger.debug(chalk.cyan('Sending request to AI:'), {
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
             language: language
         });
+
+        console.log('\n');
 
         const systemPrompt = `${prompt.system}
 
@@ -140,6 +148,8 @@ ${contextStr}
             return createFallbackResponse(context);
         }
 
+        console.log();
+
         logger.debug(chalk.green('Response received:'), {
             length: aiResponse.length,
             preview: aiResponse.substring(0, 100)
@@ -182,6 +192,8 @@ ${contextStr}
             logger.error(chalk.red('Error:'), error);
         }
         return createFallbackResponse(context);
+    } finally {
+        spinner.stop();
     }
 }
 
@@ -242,21 +254,22 @@ function validateResponseFormat(response: string, language: SupportedLanguage): 
     });
 
     // Log validation details with more info about actions
-    logger.debug(chalk.cyan('Response Validation:'), {
-        sections: foundSections.map(s => {
-            const status = s.found 
-                ? (s.hasContent 
-                    ? '✓' 
-                    : 'empty')
-                : '✗';
-            const extra = s.type === 'actions' && s.content 
-                ? ` (${s.content.split('\n').filter(l => l.trim().startsWith('-')).length} choices)`
-                : '';
+    const debugObj = {
+        sections: foundSections.map((s) => {
+            const status = s.found ? (s.hasContent ? '✓' : 'empty') : '✗';
+            const extra =
+                s.type === 'actions' && s.content
+                    ? ` (${s.content.split('\n').filter((l) => l.trim().startsWith('-')).length} choices)`
+                    : '';
             return `${s.type}: ${status}${extra}`;
         }),
         required: ['narration', 'atmosphere', 'actions'].join(', '),
-        preview: response.substring(0, 100)
-    });
+        response: response
+    };
+    // Option 2: Using Node's util.inspect for possibly better formatting with colors
+    logger.debug(
+        `Response Validation:\n${util.inspect(debugObj, { depth: null, colors: true, compact: false })}`
+    );
 
     // Must have required sections with content
     const requiredTypes = ['narration', 'atmosphere', 'actions'];
