@@ -14,15 +14,19 @@ import { Guild, VoiceChannel, ChannelType, CategoryChannel } from 'discord.js';
 import { Readable } from 'stream';
 import { logger } from '../utils/logger';
 import axios from 'axios';
-import { generateTTSAudio } from './voice/tts';
+import { generateTTSAudio, ttsEvents } from './voice/tts';
 import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { VoiceType, KokoroVoice } from '../types/game';
+import { EventEmitter } from 'events';
 
 // Keep track of active connections and players
 const activeConnections = new Map<string, VoiceConnection>();
 const activePlayers = new Map<string, AudioPlayer>();
+
+// Create event emitter for voice events
+export const voiceEvents = new EventEmitter();
 
 const DISCONNECT_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 const disconnectTimers = new Map<string, NodeJS.Timeout>();
@@ -67,7 +71,7 @@ async function getAudioFromElevenLabs(text: string): Promise<Buffer | null> {
 function getKokoroVoiceForLanguage(language: string): KokoroVoice {
     switch (language.toLowerCase()) {
         case 'pt-br':
-            return 'pf_heart';
+            return 'pm_alex';
         case 'es':
             return 'ef_heart';
         case 'fr':
@@ -81,7 +85,7 @@ function getKokoroVoiceForLanguage(language: string): KokoroVoice {
         case 'it':
             return 'if_heart';
         default:
-            return 'am_adam'; // Default to English
+            return 'bm_lewis'; // Default to English
     }
 }
 
@@ -160,60 +164,51 @@ export async function speakInVoiceChannel(
         player = createAudioPlayer({
             behaviors: {
                 noSubscriber: NoSubscriberBehavior.Play,
-                maxMissedFrames: 50
+                maxMissedFrames: 100
             }
         });
         
         connection.subscribe(player);
 
-        logger.debug(`Generating audio with voice type: ${voiceType}`);
-
         // Generate audio based on voice type
         switch (voiceType) {
+            case 'kokoro': {
+                const kokoroVoice = getKokoroVoiceForLanguage(language);
+                logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
+                
+                audioPath = await generateTTSAudio(text, {
+                    engine: 'kokoro',
+                    voice: kokoroVoice,
+                    speed: 1.0
+                });
+                break;
+            }
+            
             case 'elevenlabs': {
                 const audioBuffer = await getAudioFromElevenLabs(text);
                 if (!audioBuffer) {
                     throw new Error('Failed to generate audio with ElevenLabs');
                 }
                 
-                // Save buffer to temporary file
                 const timestamp = Date.now();
                 audioPath = join(process.cwd(), 'tts', 'output', `elevenlabs_${timestamp}.mp3`);
                 await require('fs/promises').writeFile(audioPath, audioBuffer);
                 break;
             }
             
-            case 'kokoro': {
-                // Use Kokoro with language-appropriate voice
-                const kokoroVoice = getKokoroVoiceForLanguage(language);
-                logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
-                audioPath = await generateTTSAudio(text, {
-                    engine: 'kokoro',
-                    voice: kokoroVoice,
-                    speed: 1.0
-                });
-                break;
-            }
-            
             default:
-                logger.warn(`Unsupported voice type: ${voiceType}, falling back to Kokoro`);
-                const kokoroVoice = getKokoroVoiceForLanguage(language);
-                audioPath = await generateTTSAudio(text, {
-                    engine: 'kokoro',
-                    voice: kokoroVoice,
-                    speed: 1.0
-                });
-                break;
+                throw new Error(`Unsupported voice type: ${voiceType}`);
         }
 
         if (!audioPath || !existsSync(audioPath)) {
             throw new Error('Failed to generate audio file');
         }
 
-        // Play audio
+        // Create audio resource and play it
         const resource = createAudioResource(audioPath, {
             inputType: StreamType.Arbitrary,
-            inlineVolume: true
+            inlineVolume: true,
+            silencePaddingFrames: 3
         });
 
         if (resource.volume) {
@@ -222,27 +217,37 @@ export async function speakInVoiceChannel(
 
         player.play(resource);
 
+        // Emit playbackStarted event when the player starts playing
+        player.once(AudioPlayerStatus.Playing, () => {
+            logger.debug('Audio playback started');
+            voiceEvents.emit('playbackStarted', adventureId);
+        });
+
         // Wait for playback to complete
-        await new Promise((resolve, reject) => {
-            player!.on(AudioPlayerStatus.Playing, () => {
-                logger.debug('Audio playback started');
+        await new Promise<void>((resolve) => {
+            if (!player) {
+                resolve();
+                return;
+            }
+
+            player.once(AudioPlayerStatus.Idle, () => {
+                logger.debug('Audio playback completed');
+                resolve();
             });
 
-            player!.on(AudioPlayerStatus.Idle, () => {
-                resolve(true);
-            });
-
-            player!.on('error', (error) => {
+            player.once('error', (error) => {
                 logger.error('Audio playback error:', error);
-                reject(error);
+                resolve();
             });
         });
 
-        // Clean up audio file after playback
-        try {
-            await unlink(audioPath);
-        } catch (error) {
-            logger.error('Error cleaning up audio file:', error);
+        // Clean up
+        if (audioPath) {
+            try {
+                await unlink(audioPath);
+            } catch (error) {
+                logger.error('Error cleaning up audio file:', error);
+            }
         }
 
         // Set disconnect timer

@@ -4,8 +4,8 @@ import os
 import sys
 import json
 import asyncio
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Literal
 import torch
@@ -16,6 +16,9 @@ import time
 from kokoro import KPipeline
 import soundfile as sf
 import warnings
+import io
+import wave
+import struct
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -33,6 +36,24 @@ logger = logging.getLogger(__name__)
 # Suppress tqdm progress bars
 os.environ['TQDM_DISABLE'] = '1'
 
+# Get language code from voice prefix
+def get_lang_code(voice: str) -> str:
+    prefix = voice[:2]
+    return {
+        'am': 'a',  # English male
+        'af': 'a',  # English female
+        'bm': 'a',  # English male
+        'ef': 'e',  # Spanish
+        'ff': 'f',  # French
+        'jf': 'j',  # Japanese
+        'zf': 'z',  # Chinese
+        'hf': 'h',  # Hindi
+        'if': 'i',  # Italian
+        'pm': 'p',  # Portuguese male
+        'pf': 'p',  # Portuguese female
+    }.get(prefix, 'a')  # Default to English if unknown
+
+       
 class TTSEngine:
     _instance = None
     
@@ -55,6 +76,7 @@ class TTSEngine:
             # Initialize Kokoro
             logger.info("Initializing Kokoro...")
             try:
+         # Initialize with English first (we'll switch language as needed)
                 self.kokoro = KPipeline(lang_code='a', device=device)
                 logger.info(f"Kokoro models loaded successfully on device: {device}")
                 self.initialized_engines.add('kokoro')
@@ -107,92 +129,84 @@ async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str]
     """Generate audio using Kokoro engine"""
     logger.info(f"Generating audio with Kokoro")
     try:
-        timestamp = int(time.time())
-        output_filename = f"output_audio_{timestamp}.wav"
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
-        output_path = os.path.join(output_dir, output_filename)
-
-        # Ensure output directory exists with proper permissions
-        os.makedirs(output_dir, exist_ok=True)
-        os.chmod(output_dir, 0o755)  # rwxr-xr-x
-        
-        logger.info(f"Directory: {output_dir}")
-        logger.info(f"WAV path: {output_path}")
-
         # Initialize and use Kokoro for generation
-        pipeline = tts_engine.get_kokoro()  # This will initialize only Kokoro if needed
+        pipeline = tts_engine.get_kokoro()
         audio_chunks = []
-        logger.info(f"Engine OK! - Chunks Declared Empty")
 
         # Generate audio with Kokoro
         generator = pipeline(
             text,
-            voice=voice or 'af_heart',  # Default to af_heart if no voice specified
+            voice=voice or 'af_heart',
             speed=speed,
             split_pattern=r'\n+'
         )
-        logger.info(f"Pipeline Set")
 
+        # Process chunks
         for _, _, audio in generator:
             audio_chunks.append(audio)
-            logger.info(f"Chunk appended, length: {len(audio)}")
 
         if not audio_chunks:
             raise RuntimeError("No audio was generated")
 
-        # Combine chunks if multiple
-        if len(audio_chunks) > 1:
-            combined_audio = np.concatenate(audio_chunks)
-            logger.info(f"Chunks Combined - Total length: {len(combined_audio)}")
-        else:
-            combined_audio = audio_chunks[0]
-            logger.info(f"Single Chunk - Length: {len(combined_audio)}")
+        # Combine chunks
+        combined_audio = np.concatenate(audio_chunks) if len(audio_chunks) > 1 else audio_chunks[0]
         
-        # Save WAV file
-        logger.info(f"Saving WAV file to: {output_path}")
+        # Save as WAV
+        timestamp = int(time.time())
+        output_filename = f"output_audio_{timestamp}.wav"
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        output_path = os.path.join(output_dir, output_filename)
+        
+        os.makedirs(output_dir, exist_ok=True)
         sf.write(output_path, combined_audio, 24000)
         
-        # Verify WAV file exists and has content
-        if not os.path.exists(output_path):
-            raise RuntimeError(f"Failed to save WAV file at {output_path}")
-        
-        wav_size = os.path.getsize(output_path)
-        logger.info(f"WAV file created successfully, size: {wav_size} bytes")
-
         return output_path
 
     except Exception as e:
         logger.error(f"Error generating audio: {str(e)}")
-        logger.error(f"Error type: {type(e)}")
-        logger.error(f"Error traceback: {sys.exc_info()[2]}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
     """TTS endpoint that handles Kokoro requests"""
     try:
-        logger.debug(f"Received TTS request: {request.dict()}")
+        # First send a header to indicate generation has started
+        async def generate_response():
+            try:
+                # Get language code from voice
+                voice = request.voice or 'af_heart'
+                lang_code = get_lang_code(voice)
+                
+                # Reinitialize Kokoro with correct language if needed
+                if tts_engine.kokoro.lang_code != lang_code:
+                    tts_engine.kokoro = KPipeline(lang_code=lang_code, device=device)
+                
+                output_path = await generate_audio(
+                    text=request.text,
+                    engine=request.engine,
+                    voice=voice,
+                    speed=request.speed
+                )
+                
+                # First yield a status message
+                yield b'{"status": "started"}\n'
+                
+                # Then yield the actual audio data
+                with open(output_path, 'rb') as f:
+                    while chunk := f.read(8192):
+                        yield chunk
+                
+            except Exception as e:
+                logger.error(f"Error in TTS generation: {e}")
+                yield b'{"status": "error", "message": "' + str(e).encode() + b'"}\n'
         
-        # Generate audio file
-        output_path = await generate_audio(
-            text=request.text,
-            engine=request.engine,
-            voice=request.voice,
-            speed=request.speed
-        )
-        
-        # Verify file exists before sending
-        if not os.path.exists(output_path):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Generated file not found at {output_path}"
-            )
-        
-        # Return audio file
-        return FileResponse(
-            output_path,
+        return StreamingResponse(
+            generate_response(),
             media_type="audio/wav",
-            headers={"Content-Disposition": f"attachment; filename={os.path.basename(output_path)}"}
+            headers={
+                "Content-Disposition": f"attachment; filename=output_audio.wav",
+                "X-Accel-Buffering": "no"
+            }
         )
         
     except Exception as e:

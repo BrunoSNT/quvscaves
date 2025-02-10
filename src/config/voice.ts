@@ -8,8 +8,9 @@ export const KOKORO_VOICES_BY_LANGUAGE = {
         { label: 'Spirit (English)', value: 'af_spirit' as KokoroVoice }
     ],
     'pt-BR': [
-        { label: 'Heart (Portuguese)', value: 'pf_heart' as KokoroVoice },
-        { label: 'Soul (Portuguese)', value: 'pf_soul' as KokoroVoice }
+        { label: 'Alex (Portuguese)', value: 'pm_alex' as KokoroVoice },
+        { label: 'Dora (Portuguese)', value: 'pf_dora' as KokoroVoice },
+        { label: 'Santa (Portuguese)', value: 'pm_santa' as KokoroVoice },
     ]
 } as const;
 

@@ -3,6 +3,7 @@ import { logger } from '../../utils/logger';
 import { existsSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { EventEmitter } from 'events';
 
 let serverProcess: ReturnType<typeof spawn> | null = null;
 const SERVER_URL = 'http://localhost:8000';
@@ -21,11 +22,13 @@ export const KOKORO_VOICES = {
     chinese: ['zf_heart', 'zf_soul'],
     hindi: ['hf_heart', 'hf_soul'],
     italian: ['if_heart', 'if_soul'],
-    portuguese: ['pm_adam', 'pf_heart', 'pm_soul', 'pf_soul']
+    portuguese: ['pm_alex', 'pf_dora', 'pm_santa',]
 } as const;
 
-interface TTSOptions {
-    engine?: TTSEngine;
+export const ttsEvents = new EventEmitter();
+
+export interface TTSOptions {
+    engine?: string;
     voice?: string;
     speed?: number;
 }
@@ -115,14 +118,69 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
                 voice: options.voice || 'af_heart',
                 speed: options.speed || 1.0
             },
-            responseType: 'arraybuffer',
+            responseType: 'stream',
             headers: {
                 'Accept': 'audio/wav'
             }
         });
 
-        // Save the audio file
-        writeFileSync(outputPath, response.data);
+        // Create a write stream for the output file
+        const { createWriteStream } = require('fs');
+        const writeStream = createWriteStream(outputPath);
+        let isFirstChunk = true;
+        let statusReceived = false;
+        let buffer = Buffer.from('');
+
+        // Process the stream
+        response.data.on('data', (chunk: Buffer) => {
+            if (!statusReceived) {
+                // Append to buffer until we find a newline
+                buffer = Buffer.concat([buffer, chunk]);
+                const str = buffer.toString();
+                const newlineIndex = str.indexOf('\n');
+                
+                if (newlineIndex !== -1) {
+                    // We found the status message
+                    const statusMessage = str.slice(0, newlineIndex);
+                    try {
+                        const status = JSON.parse(statusMessage);
+                        if (status.status === 'started') {
+                            statusReceived = true;
+                            logger.debug('Received status message from TTS server');
+                            // Write the remaining data
+                            const remainingData = buffer.slice(newlineIndex + 1);
+                            if (remainingData.length > 0) {
+                                writeStream.write(remainingData);
+                                if (isFirstChunk) {
+                                    isFirstChunk = false;
+                                    logger.debug('Emitting firstChunk event');
+                                    ttsEvents.emit('firstChunk', outputPath);
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        logger.error('Error parsing status message:', e);
+                    }
+                }
+            } else {
+                // After status message, write chunks normally
+                writeStream.write(chunk);
+                if (isFirstChunk) {
+                    isFirstChunk = false;
+                    logger.debug('Emitting firstChunk event');
+                    ttsEvents.emit('firstChunk', outputPath);
+                }
+            }
+        });
+
+        // Wait for the stream to complete
+        await new Promise((resolve, reject) => {
+            response.data.on('end', resolve);
+            response.data.on('error', reject);
+            writeStream.on('error', reject);
+        });
+
+        writeStream.end();
 
         if (!existsSync(outputPath)) {
             throw new Error('Failed to save audio file');

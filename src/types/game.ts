@@ -175,14 +175,14 @@ export interface GameConfig {
 }
 
 export type KokoroVoice = 
-    | 'af_heart' | 'af_soul' | 'af_mind' | 'af_spirit'  // English
+    | 'af_heart' | 'af_soul' | 'af_mind' | 'af_spirit' | 'am_adam' | 'bm_lewis'  // English
     | 'ef_heart' | 'ef_soul'                            // Spanish
     | 'ff_heart' | 'ff_soul'                            // French
     | 'jf_heart' | 'jf_soul'                            // Japanese
     | 'zf_heart' | 'zf_soul'                            // Chinese
     | 'hf_heart' | 'hf_soul'                            // Hindi
     | 'if_heart' | 'if_soul'                            // Italian
-    | 'pf_heart' | 'pf_soul';                           // Portuguese
+    | 'pf_dora' | 'pf_soul' | 'pm_alex' | 'pm_santa';                           // Portuguese
 
 export interface VoiceConfig {
     type: VoiceType;

@@ -1,7 +1,8 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, BaseGuildTextChannel } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, BaseGuildTextChannel, Guild } from 'discord.js';
 import { ResponseSections } from '../adventure';
 import { SupportedLanguage } from '../../types/game';
 import { logger } from '../logger';
+import { speakInVoiceChannel, voiceEvents } from '../../lib/voice';
 
 // Scene assets configuration
 const SCENE_ASSETS = {
@@ -181,6 +182,22 @@ export function extractSections(response: string, language: SupportedLanguage): 
     };
 }
 
+function extractVoiceText(response: string): string {
+    const sections = response.split(/\[(?=[A-Z])/);
+    const narrativeSections = sections.filter(section => 
+        section.startsWith('Narration') || 
+        section.startsWith('Narração') || 
+        section.startsWith('Atmosphere') ||
+        section.startsWith('Atmosfera')
+    ).map(section => {
+        // Clean up the section text
+        return section.replace(/^(Narration|Narração|Atmosphere|Atmosfera)\]/, '').trim();
+    });
+
+    // Combine narrative sections for voice playback
+    return narrativeSections.join('\n\n');
+}
+
 export interface FormattedResponseOptions {
     channel: BaseGuildTextChannel;
     characterName: string;
@@ -188,6 +205,9 @@ export interface FormattedResponseOptions {
     response: string;
     language: SupportedLanguage;
     voiceType?: 'none' | 'discord' | 'elevenlabs' | 'kokoro';
+    guild?: Guild;
+    categoryId?: string;
+    adventureId?: string;
 }
 
 export async function sendFormattedResponse({
@@ -196,7 +216,10 @@ export async function sendFormattedResponse({
     action,
     response,
     language,
-    voiceType = 'none'
+    voiceType = 'none',
+    guild,
+    categoryId,
+    adventureId
 }: FormattedResponseOptions) {
     // First send the player's action
     await channel.send({
@@ -257,11 +280,79 @@ export async function sendFormattedResponse({
         iconURL: 'https://i.imgur.com/AfFp7pu.png'
     });
 
-    // Send the story embed
-    await channel.send({
-        embeds: [storyEmbed],
-        tts: voiceType === 'discord'
-    });
+    // Start voice playback if enabled
+    if (voiceType !== 'none' && guild && categoryId && adventureId) {
+        try {
+            const voiceText = extractVoiceText(response);
+            if (voiceText) {
+                logger.debug('Starting voice playback with text:', {
+                    textLength: voiceText.length,
+                    voiceType
+                });
+
+                // Create a promise that resolves when playback starts
+                const playbackPromise = new Promise<void>((resolve) => {
+                    voiceEvents.once('playbackStarted', (id) => {
+                        if (id === adventureId) {
+                            logger.debug(`Received playbackStarted event for adventure: ${adventureId}`);
+                            // Send the story embed when playback starts
+                            channel.send({
+                                embeds: [storyEmbed],
+                                tts: voiceType === 'discord'
+                            });
+                            resolve();
+                        }
+                    });
+                });
+
+                // Start voice playback (don't await it)
+                speakInVoiceChannel(
+                    voiceText,
+                    guild,
+                    categoryId,
+                    adventureId,
+                    voiceType,
+                    language
+                ).catch(error => {
+                    logger.error('Error in voice playback:', error);
+                    // On voice error, still send the embed
+                    channel.send({
+                        embeds: [storyEmbed],
+                        tts: false
+                    });
+                });
+
+                // Wait for playback to start or timeout after 5 seconds
+                await Promise.race([
+                    playbackPromise,
+                    new Promise<void>((resolve) => setTimeout(() => {
+                        logger.warn('Playback start timeout, sending embed anyway');
+                        resolve();
+                    }, 60000))
+                ]);
+            } else {
+                logger.debug('No narrative sections found for voice playback');
+                // If no voice text, just send the embed
+                await channel.send({
+                    embeds: [storyEmbed],
+                    tts: false
+                });
+            }
+        } catch (voiceError) {
+            logger.error('Error in voice playback:', voiceError);
+            // On voice error, still send the embed
+            await channel.send({
+                embeds: [storyEmbed],
+                tts: false
+            });
+        }
+    } else {
+        // No voice playback, just send the embed
+        await channel.send({
+            embeds: [storyEmbed],
+            tts: false
+        });
+    }
 
     // Create and send action buttons if there are any
     if (sections.actions.length > 0) {

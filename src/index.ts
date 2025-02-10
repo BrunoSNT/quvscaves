@@ -659,51 +659,11 @@ client.on(Events.InteractionCreate, async interaction => {
                     action,
                     response,
                     language: userAdventure.language as SupportedLanguage,
-                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined
+                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined,
+                    guild: interaction.guild!,
+                    categoryId: userAdventure.categoryId || undefined,
+                    adventureId: userAdventure.id
                 });
-
-                // Voice playback if enabled
-                if (userAdventure.categoryId && userAdventure.voiceType !== 'none') {
-                    try {
-                        // Extract narrative sections for voice
-                        const sections = response.split(/\[(?=[A-Z])/);
-                        const narrativeSections = sections.filter(section => 
-                            section.startsWith('Narration') || 
-                            section.startsWith('Narração') || 
-                            section.startsWith('Atmosphere') ||
-                            section.startsWith('Atmosfera')
-                        ).map(section => {
-                            // Clean up the section text
-                            return section.replace(/^(Narration|Narração|Atmosphere|Atmosfera)\]/, '').trim();
-                        });
-
-                        // Combine narrative sections for voice playback
-                        const voiceText = narrativeSections.join('\n\n');
-                        if (voiceText) {
-                            logger.debug('Starting voice playback with text:', {
-                                textLength: voiceText.length,
-                                voiceType: userAdventure.voiceType
-                            });
-
-                            await speakInVoiceChannel(
-                                voiceText,
-                                interaction.guild!,
-                                userAdventure.categoryId,
-                                userAdventure.id,
-                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'kokoro' as VoiceType
-                            );
-                        } else {
-                            logger.debug('No narrative sections found for voice playback');
-                        }
-                    } catch (voiceError) {
-                        logger.error('Error in voice playback:', voiceError);
-                    }
-                } else {
-                    logger.debug('Voice playback skipped:', {
-                        hasCategory: !!userAdventure.categoryId,
-                        voiceType: userAdventure.voiceType
-                    });
-                }
 
                 await interaction.editReply({
                     content: '✨ Ação processada!'
