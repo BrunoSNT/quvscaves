@@ -6,85 +6,95 @@ import { join } from 'path';
 
 let serverProcess: ReturnType<typeof spawn> | null = null;
 const SERVER_URL = 'http://localhost:8000';
-const MIN_TIMEOUT = 30000; // 30 seconds minimum
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 1000; // 1 second
 
-function estimateTimeout(text: string): number {
-    // Rough estimate: 2 seconds per 15 characters, plus 10 seconds buffer
-    const estimatedSeconds = Math.max(30, Math.ceil(text.length / 15) * 2) + 10;
-    return estimatedSeconds * 1000; // Convert to milliseconds
+// Voice engine types
+export type TTSEngine = 'kokoro';
+
+// Kokoro voice options
+export const KOKORO_VOICES = {
+    english: ['af_heart', 'af_soul', 'af_mind', 'af_spirit'],
+    spanish: ['ef_heart', 'ef_soul'],
+    french: ['ff_heart', 'ff_soul'],
+    japanese: ['jf_heart', 'jf_soul'],
+    chinese: ['zf_heart', 'zf_soul'],
+    hindi: ['hf_heart', 'hf_soul'],
+    italian: ['if_heart', 'if_soul'],
+    portuguese: ['pf_heart', 'pf_soul']
+} as const;
+
+interface TTSOptions {
+    engine?: TTSEngine;
+    voice?: string;
+    speed?: number;
 }
 
-// Start server immediately when module is loaded
-startServer().catch(error => {
-    logger.error('Failed to start TTS server:', error);
-});
-
-async function startServer(): Promise<void> {
-    if (serverProcess) {
-        return; // Server already started
-    }
-
-    logger.debug('Starting TTS server...');
-    
-    const ttsDir = join(process.cwd(), 'tts');
-    const scriptPath = join(ttsDir, 'main.py');
-    
-    serverProcess = spawn('python3', [scriptPath], {
-        cwd: ttsDir,
-        env: {
-            ...process.env,
-            PYTHONPATH: ttsDir
-        }
-    });
-
-    serverProcess.stdout?.on('data', (data) => {
-        const message = data.toString();
-        if (!message.includes('INFO:')) { // Don't log uvicorn INFO messages
-            logger.debug('TTS Server:', message);
-        }
-    });
-
-    serverProcess.stderr?.on('data', (data) => {
-        const message = data.toString();
-        if (message.includes('ERROR')) {
-            logger.error('TTS Server Error:', message);
-        } else {
-            logger.debug('TTS Server:', message);
-        }
-    });
-
-    // Wait for server to be ready
-    for (let i = 0; i < 60; i++) { // 60 seconds timeout for initial startup
+async function startServer(): Promise<boolean> {
+    try {
+        // Check if server is already running
         try {
             const response = await axios.get(`${SERVER_URL}/health`);
             if (response.data.status === 'healthy') {
-                logger.debug('TTS Server is ready');
-                return;
+                logger.info('TTS Server is already running');
+                return true;
             }
-            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-            const axiosError = error as AxiosError;
-            if (axiosError.response?.status === 503) {
-                // Server is starting up, wait
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                continue;
-            }
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Server is not running, continue with startup
         }
+
+        logger.info('Starting TTS Server...');
+        const pythonPath = process.env.PYTHON_PATH || 'python3';
+        const scriptPath = join(process.cwd(), 'tts', 'main.py');
+
+        if (!existsSync(scriptPath)) {
+            logger.error('TTS Server script not found:', scriptPath);
+            return false;
+        }
+
+        serverProcess = spawn(pythonPath, [scriptPath], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        serverProcess.stdout?.on('data', (data) => {
+            logger.debug('TTS Server:', data.toString());
+        });
+
+        serverProcess.stderr?.on('data', (data) => {
+            logger.error('TTS Server Error:', data.toString());
+        });
+
+        // Wait for server to start
+        for (let i = 0; i < MAX_RETRIES; i++) {
+            try {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+                const response = await axios.get(`${SERVER_URL}/health`);
+                if (response.data.status === 'healthy') {
+                    logger.info('TTS Server started successfully');
+                    return true;
+                }
+            } catch (error) {
+                if (i === MAX_RETRIES - 1) {
+                    logger.error('Failed to start TTS server after retries');
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    } catch (error) {
+        logger.error('Failed to start TTS server:', error);
+        return false;
     }
-    
-    throw new Error('Failed to start TTS server');
 }
 
-export async function generateChatTTSAudio(text: string): Promise<string> {
+export async function generateChatTTSAudio(text: string, options: TTSOptions = {}): Promise<string> {
     try {
         // Ensure server is running
-        if (!serverProcess) {
-            await startServer();
+        const serverStarted = await startServer();
+        if (!serverStarted) {
+            throw new Error('Failed to start TTS server');
         }
-
-        const timeout = estimateTimeout(text);
-        logger.debug(`Using timeout of ${timeout}ms for text length ${text.length}`);
 
         // Generate temporary file path
         const timestamp = Date.now();
@@ -95,49 +105,35 @@ export async function generateChatTTSAudio(text: string): Promise<string> {
         const { mkdir } = require('fs/promises');
         await mkdir(outputDir, { recursive: true });
 
-        // Stream the response to file
+        // Request audio generation with options, always using kokoro
         const response = await axios({
             method: 'post',
             url: `${SERVER_URL}/tts`,
-            data: { text },
-            responseType: 'stream',
-            timeout: timeout
+            data: {
+                text,
+                engine: 'kokoro',
+                voice: options.voice || 'af_heart',
+                speed: options.speed || 1.0
+            },
+            responseType: 'arraybuffer'
         });
 
-        // Write stream to file
-        const writer = require('fs').createWriteStream(outputPath);
-        response.data.pipe(writer);
-
-        await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
+        // Save the audio file
+        writeFileSync(outputPath, response.data);
 
         if (!existsSync(outputPath)) {
             throw new Error('Failed to save audio file');
-        }
-
-        const processingTime = response.headers['x-processing-time'];
-        if (processingTime) {
-            logger.debug(`Server processing time: ${processingTime}s`);
         }
 
         return outputPath;
 
     } catch (error) {
         if (error instanceof AxiosError) {
-            if (error.code === 'ECONNABORTED') {
-                logger.error('TTS request timed out:', {
-                    textLength: text.length,
-                    timeout: error.config?.timeout
-                });
-            } else {
-                logger.error('Network error in generateChatTTSAudio:', {
-                    status: error.response?.status,
-                    data: error.response?.data,
-                    message: error.message
-                });
-            }
+            logger.error('Network error in generateChatTTSAudio:', {
+                status: error.response?.status,
+                data: error.response?.data,
+                message: error.message
+            });
         } else {
             logger.error('Error in generateChatTTSAudio:', error);
         }

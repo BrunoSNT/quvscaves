@@ -24,6 +24,7 @@ import {
     MagicLevel
 } from '../../types/game';
 import { getMessages } from '../../utils/language';
+import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../config/voice';
 
 interface Character {
     id: string;
@@ -39,7 +40,7 @@ interface Character {
 }
 
 export async function handleStartAdventure(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: ['Ephemeral'] });
 
     try {
         logger.debug('Starting adventure creation process...');
@@ -295,24 +296,24 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                         .setPlaceholder('Choose voice type')
                         .addOptions([
                             {
-                                label: 'Text Only',
+                                label: 'None',
                                 value: 'none',
-                                description: 'No voice, just text narration'
+                                description: VOICE_DESCRIPTIONS.none
                             },
                             {
                                 label: 'Discord TTS',
                                 value: 'discord',
-                                description: 'Use Discord\'s built-in Text-to-Speech'
+                                description: VOICE_DESCRIPTIONS.discord
                             },
                             {
                                 label: 'ElevenLabs',
                                 value: 'elevenlabs',
-                                description: 'Use ElevenLabs for more natural voices'
+                                description: VOICE_DESCRIPTIONS.elevenlabs
                             },
                             {
-                                label: 'ChatTTS',
-                                value: 'chattts',
-                                description: 'Use ChatTTS for high-quality offline voices'
+                                label: 'Kokoro',
+                                value: 'kokoro',
+                                description: VOICE_DESCRIPTIONS.kokoro
                             }
                         ])
                 );
@@ -346,10 +347,41 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                         .setStyle(2)
                 );
 
-            await voiceInteraction.update({
-                content: `Voice type set to: ${voiceType}\nLastly, choose the privacy setting:`,
-                components: [privacyRow]
-            });
+            // If Kokoro is selected, show voice options based on language
+            let kokoroVoice: string | undefined;
+            if (voiceType === 'kokoro') {
+                const voiceOptions = [...(KOKORO_VOICES_BY_LANGUAGE[language as keyof typeof KOKORO_VOICES_BY_LANGUAGE] || KOKORO_VOICES_BY_LANGUAGE['en-US'])];
+                
+                const kokoroVoiceRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
+                    .addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId('kokoro_voice_select')
+                            .setPlaceholder('Choose Kokoro voice')
+                            .addOptions(voiceOptions)
+                    );
+
+                await voiceInteraction.update({
+                    content: 'Choose a Kokoro voice:',
+                    components: [kokoroVoiceRow]
+                });
+
+                const kokoroVoiceInteraction = await setupMsg.awaitMessageComponent({
+                    filter: i => i.user.id === interaction.user.id,
+                    time: 300000
+                }) as StringSelectMenuInteraction;
+
+                kokoroVoice = kokoroVoiceInteraction.values[0];
+
+                await kokoroVoiceInteraction.update({
+                    content: `Voice type set to: Kokoro (${kokoroVoice})\nLastly, choose the privacy setting:`,
+                    components: [privacyRow]
+                });
+            } else {
+                await voiceInteraction.update({
+                    content: `Voice type set to: ${voiceType}\nLastly, choose the privacy setting:`,
+                    components: [privacyRow]
+                });
+            }
 
             const privacyInteraction = await setupMsg.awaitMessageComponent({
                 filter: i => i.user.id === interaction.user.id,

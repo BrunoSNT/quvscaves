@@ -659,7 +659,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     action,
                     response,
                     language: userAdventure.language as SupportedLanguage,
-                    voiceType: userAdventure.voiceType as VoiceType
+                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined
                 });
 
                 // Voice playback if enabled
@@ -690,7 +690,7 @@ client.on(Events.InteractionCreate, async interaction => {
                                 interaction.guild!,
                                 userAdventure.categoryId,
                                 userAdventure.id,
-                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'chattts'
+                                userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'chattts' as VoiceType
                             );
                         } else {
                             logger.debug('No narrative sections found for voice playback');

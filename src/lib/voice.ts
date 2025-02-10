@@ -18,6 +18,7 @@ import { generateChatTTSAudio } from './voice/chattts';
 import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
+import { VoiceType, KokoroVoice } from '../types/game';
 
 // Keep track of active connections and players
 const activeConnections = new Map<string, VoiceConnection>();
@@ -62,18 +63,51 @@ async function getAudioFromElevenLabs(text: string): Promise<Buffer | null> {
     }
 }
 
-// Helper function to create a voice channel
-async function createVoiceChannel(guild: Guild, categoryId: string, channelName: string): Promise<VoiceChannel> {
-    const category = await guild.channels.fetch(categoryId) as CategoryChannel;
-    if (!category) {
-        throw new Error('Category not found');
+// Helper function to determine Kokoro voice based on language
+function getKokoroVoiceForLanguage(language: string): KokoroVoice {
+    switch (language.toLowerCase()) {
+        case 'pt-br':
+            return 'pf_heart';
+        case 'es':
+            return 'ef_heart';
+        case 'fr':
+            return 'ff_heart';
+        case 'ja':
+            return 'jf_heart';
+        case 'zh':
+            return 'zf_heart';
+        case 'hi':
+            return 'hf_heart';
+        case 'it':
+            return 'if_heart';
+        default:
+            return 'af_heart'; // Default to English
     }
+}
 
-    return await guild.channels.create({
-        name: channelName,
-        type: ChannelType.GuildVoice,
-        parent: category
-    }) as VoiceChannel;
+// Function to ensure TTS server is running
+async function ensureTTSServerRunning(): Promise<boolean> {
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 2000; // 2 seconds
+
+    for (let i = 0; i < MAX_RETRIES; i++) {
+        try {
+            logger.debug(`Attempting to connect to TTS server (attempt ${i + 1}/${MAX_RETRIES})...`);
+            const response = await axios.get('http://localhost:8000/health');
+            if (response.data.status === 'healthy') {
+                logger.debug('TTS server is healthy');
+                return true;
+            }
+        } catch (error) {
+            if (i === MAX_RETRIES - 1) {
+                logger.error('Failed to connect to TTS server after all retries');
+                throw error;
+            }
+            logger.debug(`TTS server not ready, retrying in ${RETRY_DELAY}ms...`);
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+        }
+    }
+    return false;
 }
 
 export async function speakInVoiceChannel(
@@ -81,13 +115,20 @@ export async function speakInVoiceChannel(
     guild: Guild,
     categoryId: string,
     adventureId: string,
-    voiceType: 'elevenlabs' | 'chattts' = 'chattts'
+    voiceType: VoiceType = 'kokoro',
+    language: string = 'en-US'
 ) {
     let connection: VoiceConnection | null = null;
     let audioPath: string | null = null;
     let player: AudioPlayer | null = null;
 
     try {
+        // Check if TTS server is running
+        const serverRunning = await ensureTTSServerRunning();
+        if (!serverRunning) {
+            throw new Error('TTS server is not running');
+        }
+
         // Find the Table voice channel
         const category = await guild.channels.fetch(categoryId) as CategoryChannel | null;
         if (!category) {
@@ -125,8 +166,46 @@ export async function speakInVoiceChannel(
         
         connection.subscribe(player);
 
-        // Generate audio
-        audioPath = await generateChatTTSAudio(text);
+        logger.debug(`Generating audio with voice type: ${voiceType}`);
+
+        // Generate audio based on voice type
+        switch (voiceType) {
+            case 'elevenlabs': {
+                const audioBuffer = await getAudioFromElevenLabs(text);
+                if (!audioBuffer) {
+                    throw new Error('Failed to generate audio with ElevenLabs');
+                }
+                
+                // Save buffer to temporary file
+                const timestamp = Date.now();
+                audioPath = join(process.cwd(), 'tts', 'output', `elevenlabs_${timestamp}.mp3`);
+                await require('fs/promises').writeFile(audioPath, audioBuffer);
+                break;
+            }
+            
+            case 'kokoro': {
+                // Use Kokoro with language-appropriate voice
+                const kokoroVoice = getKokoroVoiceForLanguage(language);
+                logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
+                audioPath = await generateChatTTSAudio(text, {
+                    engine: 'kokoro',
+                    voice: kokoroVoice,
+                    speed: 1.0
+                });
+                break;
+            }
+            
+            default:
+                logger.warn(`Unsupported voice type: ${voiceType}, falling back to Kokoro`);
+                const kokoroVoice = getKokoroVoiceForLanguage(language);
+                audioPath = await generateChatTTSAudio(text, {
+                    engine: 'kokoro',
+                    voice: kokoroVoice,
+                    speed: 1.0
+                });
+                break;
+        }
+
         if (!audioPath || !existsSync(audioPath)) {
             throw new Error('Failed to generate audio file');
         }
@@ -144,7 +223,7 @@ export async function speakInVoiceChannel(
         player.play(resource);
 
         // Wait for playback to complete
-        await new Promise((resolve) => {
+        await new Promise((resolve, reject) => {
             player!.on(AudioPlayerStatus.Playing, () => {
                 logger.debug('Audio playback started');
             });
@@ -152,7 +231,19 @@ export async function speakInVoiceChannel(
             player!.on(AudioPlayerStatus.Idle, () => {
                 resolve(true);
             });
+
+            player!.on('error', (error) => {
+                logger.error('Audio playback error:', error);
+                reject(error);
+            });
         });
+
+        // Clean up audio file after playback
+        try {
+            await unlink(audioPath);
+        } catch (error) {
+            logger.error('Error cleaning up audio file:', error);
+        }
 
         // Set disconnect timer
         if (disconnectTimers.has(adventureId)) {

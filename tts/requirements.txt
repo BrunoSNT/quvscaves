@@ -9,8 +9,14 @@ vocos
 IPython
 gradio
 pybase16384
-pynini==2.1.5; sys_platform == 'linux'
-WeTextProcessing; sys_platform == 'linux'
-nemo_text_processing; sys_platform == 'linux'
-av
 pydub
+fastapi>=0.68.0,<0.69.0
+uvicorn>=0.15.0,<0.16.0
+pydantic>=1.8.0,<2.0.0
+numpy>=1.21.0
+torch>=2.0.0
+pydub>=0.25.1
+soundfile>=0.12.1
+requests>=2.31.0
+kokoro>=0.3.4
+misaki[ja,zh]

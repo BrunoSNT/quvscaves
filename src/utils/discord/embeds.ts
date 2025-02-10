@@ -181,6 +181,15 @@ export function extractSections(response: string, language: SupportedLanguage): 
     };
 }
 
+export interface FormattedResponseOptions {
+    channel: BaseGuildTextChannel;
+    characterName: string;
+    action: string;
+    response: string;
+    language: SupportedLanguage;
+    voiceType?: 'none' | 'discord' | 'elevenlabs' | 'kokoro';
+}
+
 export async function sendFormattedResponse({
     channel,
     characterName,
@@ -188,14 +197,7 @@ export async function sendFormattedResponse({
     response,
     language,
     voiceType = 'none'
-}: {
-    channel: BaseGuildTextChannel;
-    characterName: string;
-    action: string;
-    response: string;
-    language: SupportedLanguage;
-    voiceType?: 'none' | 'discord' | 'elevenlabs' | 'chattts';
-}) {
+}: FormattedResponseOptions) {
     // First send the player's action
     await channel.send({
         content: `🎭 **${characterName}**: ${action}`,

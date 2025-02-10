@@ -8,17 +8,16 @@
     "clean:prisma": "rm -rf node_modules/.prisma",
     "prebuild": "pnpm run clean:dist",
     "build": "tsc",
-    "start": "python3 tts/init_model.py && node dist/index.js",
-    "dev": "python3 tts/init_model.py && tsx watch src/index.ts",
-    "dev:debug": "python3 tts/init_model.py && tsx --inspect src/index.ts",
+    "start": "concurrently \"python tts/main.py\" \"node dist/index.js\"",
+    "dev": "concurrently \"python tts/main.py\" \"tsx watch src/index.ts\"",
+    "dev:debug": "concurrently \"python tts/main.py\" \"tsx --inspect src/index.ts\"",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
-    "setup": "pnpm run clean && pnpm install && cd tts && pip3 install -r requirements.txt && python3 download_models.py && cd .. && pnpm run prisma:generate && pnpm run build",
+    "setup": "pnpm run clean && pnpm install && cd tts && pip3 install -r requirements.txt && python download_models.py && cd .. && pnpm run prisma:generate && pnpm run build",
     "restart": "pnpm run clean:dist && pnpm run build && pnpm run start",
-    "tts:init": "python3 tts/init_model.py",
-    "tts:download": "python3 tts/download_models.py",
-    "tts:check": "python3 tts/check_models.py"
+    "tts:download": "python tts/download_models.py",
+    "tts:check": "python tts/check_models.py"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
@@ -37,6 +36,7 @@
   "devDependencies": {
     "@types/node": "^20.11.24",
     "@types/qrcode": "^1.5.5",
+    "concurrently": "^8.2.2",
     "prisma": "^5.10.2",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"

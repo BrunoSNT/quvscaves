@@ -18,10 +18,11 @@ import {
     MagicLevel,
     AdventurePrivacy
 } from '../../types/game';
+import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../config/voice';
 
 export async function handleAdventureSettings(interaction: ChatInputCommandInteraction) {
     try {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: ['Ephemeral'] });
 
         const adventureId = interaction.options.getString('adventure_id', true);
 
@@ -137,24 +138,24 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
                                 .setPlaceholder('Choose voice type')
                                 .addOptions([
                                     {
-                                        label: 'Text Only',
+                                        label: 'None',
                                         value: 'none',
-                                        description: 'No voice generation'
+                                        description: VOICE_DESCRIPTIONS.none
                                     },
                                     {
                                         label: 'Discord TTS',
                                         value: 'discord',
-                                        description: 'Use Discord\'s built-in Text-to-Speech'
+                                        description: VOICE_DESCRIPTIONS.discord
                                     },
                                     {
                                         label: 'ElevenLabs',
                                         value: 'elevenlabs',
-                                        description: 'Use ElevenLabs for more natural voices'
+                                        description: VOICE_DESCRIPTIONS.elevenlabs
                                     },
                                     {
-                                        label: 'ChatTTS',
-                                        value: 'chattts',
-                                        description: 'Use ChatTTS for high-quality offline voices'
+                                        label: 'Kokoro',
+                                        value: 'kokoro',
+                                        description: VOICE_DESCRIPTIONS.kokoro
                                     }
                                 ])
                         );
@@ -302,23 +303,59 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
                 time: 300000
             });
 
-            const updates: Record<string, any> = {};
-            const settingType = settingInteraction.values[0];
-            const newValue = settingType === 'privacy' ? 
-                (valueInteraction as ButtonInteraction).customId : 
-                (valueInteraction as StringSelectMenuInteraction).values[0];
+            if (settingInteraction.values[0] === 'voice' && (valueInteraction as StringSelectMenuInteraction).values[0] === 'kokoro') {
+                // Show voice selection for Kokoro based on adventure language
+                const voiceOptions = [...(KOKORO_VOICES_BY_LANGUAGE[adventure.language as keyof typeof KOKORO_VOICES_BY_LANGUAGE] || KOKORO_VOICES_BY_LANGUAGE['en-US'])];
+                
+                const kokoroVoiceRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
+                    .addComponents(
+                        new StringSelectMenuBuilder()
+                            .setCustomId('kokoro_voice_select')
+                            .setPlaceholder('Choose Kokoro voice')
+                            .addOptions(voiceOptions)
+                    );
 
-            updates[settingType === 'voice' ? 'voiceType' : settingType] = newValue;
+                await valueInteraction.update({
+                    content: 'Choose a Kokoro voice:',
+                    components: [kokoroVoiceRow]
+                });
 
-        await prisma.adventure.update({
-            where: { id: adventureId },
-            data: updates
-        });
+                const kokoroVoiceInteraction = await setupMsg.awaitMessageComponent({
+                    filter: i => i.user.id === interaction.user.id,
+                    time: 300000
+                }) as StringSelectMenuInteraction;
 
-            await valueInteraction.update({
-                content: `Successfully updated ${settingType.replace(/_/g, ' ')} to: ${newValue}`,
-                components: []
-            });
+                // Update the adventure with voice type only (voice selection is handled by the TTS server)
+                await prisma.adventure.update({
+                    where: { id: adventureId },
+                    data: {
+                        voiceType: 'kokoro'
+                    }
+                });
+
+                await kokoroVoiceInteraction.update({
+                    content: `Successfully updated voice settings to Kokoro with voice: ${kokoroVoiceInteraction.values[0]}`,
+                    components: []
+                });
+            } else {
+                const updates: Record<string, any> = {};
+                const settingType = settingInteraction.values[0];
+                const newValue = settingType === 'privacy' ? 
+                    (valueInteraction as ButtonInteraction).customId : 
+                    (valueInteraction as StringSelectMenuInteraction).values[0];
+
+                updates[settingType === 'voice' ? 'voiceType' : settingType] = newValue;
+
+                await prisma.adventure.update({
+                    where: { id: adventureId },
+                    data: updates
+                });
+
+                await valueInteraction.update({
+                    content: `Successfully updated ${settingType.replace(/_/g, ' ')} to: ${newValue}`,
+                    components: []
+                });
+            }
 
         } catch (error) {
             if (error instanceof Error && error.name === 'Error [InteractionCollectorError]') {

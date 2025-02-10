@@ -1,5 +1,5 @@
 export type SupportedLanguage = 'en-US' | 'pt-BR';
-export type VoiceType = 'none' | 'discord' | 'elevenlabs' | 'chattts';
+export type VoiceType = 'none' | 'discord' | 'elevenlabs' | 'kokoro';
 export type CharacterClass = 'warrior' | 'mage' | 'rogue' | 'ranger' | 'paladin';
 export type AdventureStatus = 'ACTIVE' | 'PAUSED' | 'FINISHED';
 export type FriendshipStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
@@ -172,4 +172,20 @@ export interface GameConfig {
     defaultLevel: number;
     maxInventorySize: number;
     voiceSettings: VoiceSettings;
+}
+
+export type KokoroVoice = 
+    | 'af_heart' | 'af_soul' | 'af_mind' | 'af_spirit'  // English
+    | 'ef_heart' | 'ef_soul'                            // Spanish
+    | 'ff_heart' | 'ff_soul'                            // French
+    | 'jf_heart' | 'jf_soul'                            // Japanese
+    | 'zf_heart' | 'zf_soul'                            // Chinese
+    | 'hf_heart' | 'hf_soul'                            // Hindi
+    | 'if_heart' | 'if_soul'                            // Italian
+    | 'pf_heart' | 'pf_soul';                           // Portuguese
+
+export interface VoiceConfig {
+    type: VoiceType;
+    voice?: KokoroVoice;
+    speed?: number;
 } 

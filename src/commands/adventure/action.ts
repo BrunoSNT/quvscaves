@@ -408,7 +408,8 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
                         interaction.guild!,
                         userAdventure.categoryId,
                         userAdventure.id,
-                        userAdventure.voiceType === 'elevenlabs' ? 'elevenlabs' : 'chattts'
+                        userAdventure.voiceType || 'kokoro',
+                        userAdventure.language as SupportedLanguage
                     );
                 } else {
                     logger.debug('No narrative sections found for voice playback');

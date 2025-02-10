@@ -305,12 +305,12 @@ export async function updateAdventureMemory(adventureId: string, aiResponse: str
 export async function speakInVoiceChannel(
     text: string,
     guild: Guild,
-    channelId: string,
+    categoryId: string,
     adventureId: string,
-    voiceType: 'elevenlabs' | 'chattts' = 'chattts'
+    voiceType: 'elevenlabs' | 'kokoro' = 'kokoro'
 ): Promise<void> {
     // Get the channel using the stored voice channel ID
-    const voiceChannel = guild.channels.cache.get(channelId);
+    const voiceChannel = guild.channels.cache.get(categoryId);
     if (!voiceChannel || !voiceChannel.isVoiceBased()) {
         throw new Error('Invalid voice channel');
     }
