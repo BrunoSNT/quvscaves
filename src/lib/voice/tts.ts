@@ -93,12 +93,6 @@ async function startServer(): Promise<boolean> {
 
 export async function generateTTSAudio(text: string, options: TTSOptions = {}): Promise<string> {
     try {
-        // Ensure server is running
-        const serverStarted = await startServer();
-        if (!serverStarted) {
-            throw new Error('Failed to start TTS server');
-        }
-
         // Generate temporary file path
         const timestamp = Date.now();
         const outputDir = join(process.cwd(), 'tts', 'output');
@@ -111,7 +105,7 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
         // Request audio generation with options, always using kokoro
         const response = await axios({
             method: 'post',
-            url: `${SERVER_URL}/tts`,
+            url: `${SERVER_URL}/tts/stream`,
             data: {
                 text,
                 engine: 'kokoro',
@@ -130,6 +124,8 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
         let isFirstChunk = true;
         let statusReceived = false;
         let buffer = Buffer.from('');
+        let hasWavHeader = false;
+        let minPlayableSize = 44 + 1024; // WAV header (44 bytes) + minimum audio data
 
         // Process the stream
         response.data.on('data', (chunk: Buffer) => {
@@ -146,15 +142,18 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
                         const status = JSON.parse(statusMessage);
                         if (status.status === 'started') {
                             statusReceived = true;
-                            logger.debug('Received status message from TTS server');
                             // Write the remaining data
                             const remainingData = buffer.slice(newlineIndex + 1);
                             if (remainingData.length > 0) {
                                 writeStream.write(remainingData);
-                                if (isFirstChunk) {
-                                    isFirstChunk = false;
-                                    logger.debug('Emitting firstChunk event');
-                                    ttsEvents.emit('firstChunk', outputPath);
+                                
+                                // Check if we have enough data to start playing
+                                if (remainingData.length >= minPlayableSize) {
+                                    if (isFirstChunk) {
+                                        isFirstChunk = false;
+                                        logger.debug('Emitting firstChunk event - we have enough data to start playing');
+                                        ttsEvents.emit('firstChunk', outputPath);
+                                    }
                                 }
                             }
                         }
@@ -165,9 +164,11 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
             } else {
                 // After status message, write chunks normally
                 writeStream.write(chunk);
-                if (isFirstChunk) {
+                
+                // If we haven't emitted first chunk yet and have enough data
+                if (isFirstChunk && buffer.length + chunk.length >= minPlayableSize) {
                     isFirstChunk = false;
-                    logger.debug('Emitting firstChunk event');
+                    logger.debug('Emitting firstChunk event - accumulated enough data');
                     ttsEvents.emit('firstChunk', outputPath);
                 }
             }

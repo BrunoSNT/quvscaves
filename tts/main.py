@@ -23,7 +23,7 @@ import struct
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-# Configure device to use CPU
+# Use GPU if available
 device = torch.device("cpu")
 
 # Configure logging
@@ -61,7 +61,7 @@ class TTSEngine:
         if cls._instance is None:
             cls._instance = super(TTSEngine, cls).__new__(cls)
             cls._instance.kokoro = None
-            cls._instance.sample_rate = 24000
+            cls._instance.sample_rate = 24000  # possibility: use a lower sample rate for speed
             cls._instance.initialized = False
             cls._instance.initialized_engines = set()
         return cls._instance
@@ -76,7 +76,7 @@ class TTSEngine:
             # Initialize Kokoro
             logger.info("Initializing Kokoro...")
             try:
-         # Initialize with English first (we'll switch language as needed)
+                # Optionally, load a quantized or FP16 variant if Kokoro supports it.
                 self.kokoro = KPipeline(lang_code='a', device=device)
                 logger.info(f"Kokoro models loaded successfully on device: {device}")
                 self.initialized_engines.add('kokoro')
@@ -102,7 +102,7 @@ app = FastAPI()
 
 class TTSRequest(BaseModel):
     text: str
-    speed: Optional[float] = 1.0
+    speed: Optional[float] = 1.25
     engine: Optional[Literal['kokoro']] = 'kokoro'
     voice: Optional[str] = None  # For Kokoro voices
 
@@ -125,7 +125,7 @@ async def health_check():
         raise HTTPException(status_code=503, detail="TTS engine not initialized")
     return {"status": "healthy", "initialized_engines": list(tts_engine.initialized_engines)}
 
-async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str] = None, speed: float = 1.0) -> str:
+async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str] = None, speed: float = 1.25) -> io.BytesIO:
     """Generate audio using Kokoro engine"""
     logger.info(f"Generating audio with Kokoro")
     try:
@@ -151,16 +151,12 @@ async def generate_audio(text: str, engine: str = 'kokoro', voice: Optional[str]
         # Combine chunks
         combined_audio = np.concatenate(audio_chunks) if len(audio_chunks) > 1 else audio_chunks[0]
         
-        # Save as WAV
-        timestamp = int(time.time())
-        output_filename = f"output_audio_{timestamp}.wav"
-        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
-        output_path = os.path.join(output_dir, output_filename)
+        # Save as WAV to an in-memory buffer
+        buffer = io.BytesIO()
+        sf.write(buffer, combined_audio, tts_engine.sample_rate, format='WAV')
+        buffer.seek(0)  # Reset buffer to the beginning
         
-        os.makedirs(output_dir, exist_ok=True)
-        sf.write(output_path, combined_audio, 24000)
-        
-        return output_path
+        return buffer
 
     except Exception as e:
         logger.error(f"Error generating audio: {str(e)}")
@@ -176,30 +172,29 @@ async def text_to_speech(request: TTSRequest):
                 # Get language code from voice
                 voice = request.voice or 'af_heart'
                 lang_code = get_lang_code(voice)
-                
+
                 # Reinitialize Kokoro with correct language if needed
                 if tts_engine.kokoro.lang_code != lang_code:
                     tts_engine.kokoro = KPipeline(lang_code=lang_code, device=device)
-                
-                output_path = await generate_audio(
+
+                audio_buffer = await generate_audio(
                     text=request.text,
                     engine=request.engine,
                     voice=voice,
                     speed=request.speed
                 )
-                
+
                 # First yield a status message
                 yield b'{"status": "started"}\n'
-                
-                # Then yield the actual audio data
-                with open(output_path, 'rb') as f:
-                    while chunk := f.read(8192):
-                        yield chunk
-                
+
+                # Then yield the actual audio data from the buffer
+                while chunk := audio_buffer.read(4096):
+                    yield chunk
+
             except Exception as e:
                 logger.error(f"Error in TTS generation: {e}")
                 yield b'{"status": "error", "message": "' + str(e).encode() + b'"}\n'
-        
+
         return StreamingResponse(
             generate_response(),
             media_type="audio/wav",
@@ -208,7 +203,126 @@ async def text_to_speech(request: TTSRequest):
                 "X-Accel-Buffering": "no"
             }
         )
-        
+
+    except Exception as e:
+        logger.error(f"Error in TTS endpoint: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tts/stream")
+async def text_to_speech_stream(request: TTSRequest):
+    """Streaming TTS endpoint that handles text chunks and returns audio chunks"""
+    try:
+        # Get language code from voice
+        voice = request.voice or 'af_heart'
+        lang_code = get_lang_code(voice)
+
+        # Reinitialize Kokoro with correct language if needed
+        if tts_engine.kokoro.lang_code != lang_code:
+            tts_engine.kokoro = KPipeline(lang_code=lang_code, device=device)
+
+        async def generate_audio_chunks():
+            try:
+                pipeline = tts_engine.get_kokoro()
+                
+                # Split text into smaller chunks for faster processing
+                sentences = request.text.replace('...', '.').split('. ')
+                first_chunk = True
+                all_audio = []
+                
+                # First yield a status message
+                yield b'{"status": "started"}\n'
+
+                for i, sentence in enumerate(sentences):
+                    if not sentence.strip():
+                        continue
+                        
+                    # Add period back if it's not the last sentence
+                    if i < len(sentences) - 1:
+                        sentence += '.'
+                    
+                    # Generate audio for this sentence
+                    generator = pipeline(
+                        sentence,
+                        voice=voice,
+                        speed=request.speed,
+                        split_pattern=None  # Don't split further, we already have small chunks
+                    )
+
+                    for _, _, audio in generator:
+                        # Convert tensor to numpy array if needed
+                        if torch.is_tensor(audio):
+                            audio = audio.cpu().numpy()
+                        
+                        # Convert to int16 format
+                        audio_int16 = (audio * 32767).astype(np.int16)
+                        
+                        # Create WAV in memory
+                        buffer = io.BytesIO()
+                        with wave.open(buffer, 'wb') as wav_file:
+                            wav_file.setnchannels(1)  # mono
+                            wav_file.setsampwidth(2)  # 16-bit
+                            wav_file.setframerate(tts_engine.sample_rate)
+                            wav_file.writeframes(audio_int16.tobytes())
+                        
+                        buffer.seek(0)
+                        
+                        # If this is the first chunk, emit it immediately
+                        if first_chunk:
+                            yield buffer.read()
+                            first_chunk = False
+                        else:
+                            # For subsequent chunks, we'll store them
+                            all_audio.append(audio)
+                            
+                            # Every few chunks, combine and send
+                            if len(all_audio) >= 2:
+                                # Combine stored chunks
+                                combined = np.concatenate(all_audio)
+                                all_audio = []
+                                
+                                # Convert to int16
+                                combined_int16 = (combined * 32767).astype(np.int16)
+                                
+                                # Create WAV
+                                buffer = io.BytesIO()
+                                with wave.open(buffer, 'wb') as wav_file:
+                                    wav_file.setnchannels(1)
+                                    wav_file.setsampwidth(2)
+                                    wav_file.setframerate(tts_engine.sample_rate)
+                                    wav_file.writeframes(combined_int16.tobytes())
+                                
+                                buffer.seek(0)
+                                yield buffer.read()
+
+                # Send any remaining audio
+                if all_audio:
+                    combined = np.concatenate(all_audio)
+                    combined_int16 = (combined * 32767).astype(np.int16)
+                    
+                    buffer = io.BytesIO()
+                    with wave.open(buffer, 'wb') as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(tts_engine.sample_rate)
+                        wav_file.writeframes(combined_int16.tobytes())
+                    
+                    buffer.seek(0)
+                    yield buffer.read()
+
+            except Exception as e:
+                logger.error(f"Error in TTS generation: {e}")
+                yield b'{"status": "error", "message": "' + str(e).encode() + b'"}\n'
+
+        return StreamingResponse(
+            generate_audio_chunks(),
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f"attachment; filename=output_audio.wav",
+                "X-Accel-Buffering": "no",
+                "Transfer-Encoding": "chunked"
+            }
+        )
+
     except Exception as e:
         logger.error(f"Error in TTS endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))

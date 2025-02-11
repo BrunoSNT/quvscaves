@@ -67,26 +67,18 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 `;
 }
 
-export async function generateResponse(context: GameContext): Promise<string> {
-    const spinner = ora({
-        text: chalk.cyan('Generating AI response...'),
-        spinner: 'dots12'
-    }).start();
-
+export async function* generateResponseStream(context: GameContext): AsyncGenerator<string> {
     try {
         const language = context.language;
         const prompt = getGamePrompt(language);
         const contextStr = buildContextString(context, language);
 
         logger.debug(chalk.cyan('Context:'), formatContext(context));
-
         logger.debug(chalk.cyan('Sending request to AI:'), {
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
             language: language
         });
-
-        console.log('\n');
 
         const systemPrompt = `${prompt.system}
 
@@ -107,7 +99,7 @@ For each tool call, return a json object with function name and arguments within
 {"name": <function-name>, "arguments": <args-json-object>}
 </tool_call>`;
 
-        const response = await axios.post<AIResponse>(AI_ENDPOINT, {
+        const response = await axios.post(AI_ENDPOINT, {
             model: AI_MODEL,
             prompt: `<|im_start|>system
 ${prompt.intro}
@@ -124,62 +116,37 @@ ${contextStr}
             top_p: 0.9,
             repeat_penalty: 1.1,
             stop: ["<|im_end|>"],
-            stream: false
+            stream: true
+        }, {
+            responseType: 'stream'
         });
 
-        if (!response?.data) {
-            logger.error('No response data from AI endpoint');
-            return createFallbackResponse(context);
-        }
-
-        if (response.data.error) {
-            logger.error('AI endpoint returned error:', response.data.error);
-            return createFallbackResponse(context);
-        }
-
-        if (!response.data.response) {
-            logger.error('Empty AI response:', response.data);
-            return createFallbackResponse(context);
-        }
-
-        const aiResponse = response.data.response.trim();
-        if (!aiResponse) {
-            logger.error('Empty AI response after trim');
-            return createFallbackResponse(context);
-        }
-
-        console.log();
-
-        logger.debug(chalk.green('Response received:'), {
-            length: aiResponse.length,
-            preview: aiResponse.substring(0, 100)
-        });
-
-        // Handle tool calls in the response
-        const toolCalls = aiResponse.match(/<tool_call>(.*?)<\/tool_call>/gs);
-        if (toolCalls) {
-            for (const toolCall of toolCalls) {
-                try {
-                    const toolData = JSON.parse(toolCall.replace(/<\/?tool_call>/g, ''));
-                    logger.debug(chalk.cyan('Tool Call:'), {
-                        name: toolData.name,
-                        args: JSON.stringify(toolData.arguments)
-                    });
-                } catch (error) {
-                    logger.error(chalk.red('Tool Call Error:'), error);
+        let currentChunk = '';
+        
+        for await (const chunk of response.data) {
+            const text = chunk.toString();
+            try {
+                const lines = text.split('\n').filter(Boolean);
+                for (const line of lines) {
+                    const json = JSON.parse(line);
+                    if (json.response) {
+                        currentChunk += json.response;
+                        // Yield when we have a complete sentence or significant chunk
+                        if (json.response.match(/[.!?]\s*$/)) {
+                            yield currentChunk;
+                            currentChunk = '';
+                        }
+                    }
                 }
+            } catch (e) {
+                logger.error('Error parsing chunk:', e);
             }
         }
 
-        // Remove tool calls from final response
-        const cleanResponse = aiResponse.replace(/<tool_call>.*?<\/tool_call>/gs, '').trim();
-
-        if (!validateResponseFormat(cleanResponse, language)) {
-            logger.error('Invalid AI response format:', cleanResponse);
-            return createFallbackResponse(context);
+        // Yield any remaining text
+        if (currentChunk) {
+            yield currentChunk;
         }
-
-        return cleanResponse;
 
     } catch (error) {
         if (axios.isAxiosError(error)) {
@@ -191,7 +158,29 @@ ${contextStr}
         } else {
             logger.error(chalk.red('Error:'), error);
         }
-        return createFallbackResponse(context);
+        yield createFallbackResponse(context);
+    }
+}
+
+// Keep the old function for compatibility, but make it use the stream
+export async function generateResponse(context: GameContext): Promise<string> {
+    const spinner = ora({
+        text: chalk.cyan('Generating AI response...'),
+        spinner: 'dots12'
+    }).start();
+
+    try {
+        let fullResponse = '';
+        for await (const chunk of generateResponseStream(context)) {
+            fullResponse += chunk;
+        }
+
+        if (!validateResponseFormat(fullResponse, context.language)) {
+            logger.error('Invalid AI response format:', fullResponse);
+            return createFallbackResponse(context);
+        }
+
+        return fullResponse;
     } finally {
         spinner.stop();
     }

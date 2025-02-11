@@ -125,14 +125,9 @@ export async function speakInVoiceChannel(
     let connection: VoiceConnection | null = null;
     let audioPath: string | null = null;
     let player: AudioPlayer | null = null;
+    let isPlaying = false;
 
     try {
-        // Check if TTS server is running
-        const serverRunning = await ensureTTSServerRunning();
-        if (!serverRunning) {
-            throw new Error('TTS server is not running');
-        }
-
         // Find the Table voice channel
         const category = await guild.channels.fetch(categoryId) as CategoryChannel | null;
         if (!category) {
@@ -151,7 +146,7 @@ export async function speakInVoiceChannel(
             throw new Error('Table voice channel not found');
         }
 
-        // Join voice channel
+        // Join voice channel first
         connection = joinVoiceChannel({
             channelId: tableChannel.id,
             guildId: guild.id,
@@ -170,41 +165,49 @@ export async function speakInVoiceChannel(
         
         connection.subscribe(player);
 
-        // Generate audio based on voice type
-        switch (voiceType) {
-            case 'kokoro': {
-                const kokoroVoice = getKokoroVoiceForLanguage(language);
-                logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
-                
-                audioPath = await generateTTSAudio(text, {
-                    engine: 'kokoro',
-                    voice: kokoroVoice,
-                    speed: 1.0
-                });
-                break;
-            }
-            
-            case 'elevenlabs': {
-                const audioBuffer = await getAudioFromElevenLabs(text);
-                if (!audioBuffer) {
-                    throw new Error('Failed to generate audio with ElevenLabs');
+        // Set up event handler for first chunk before starting TTS generation
+        const firstChunkPromise = new Promise<string>((resolve) => {
+            const handler = (path: string) => {
+                ttsEvents.off('firstChunk', handler);
+                resolve(path);
+            };
+            ttsEvents.once('firstChunk', handler);
+        });
+
+        // Start audio generation
+        const finalAudioPromise = (async () => {
+            switch (voiceType) {
+                case 'kokoro': {
+                    const kokoroVoice = getKokoroVoiceForLanguage(language);
+                    logger.debug(`Using Kokoro voice: ${kokoroVoice} for language: ${language}`);
+                    return generateTTSAudio(text, {
+                        engine: 'kokoro',
+                        voice: kokoroVoice,
+                        speed: 1.0
+                    });
                 }
                 
-                const timestamp = Date.now();
-                audioPath = join(process.cwd(), 'tts', 'output', `elevenlabs_${timestamp}.mp3`);
-                await require('fs/promises').writeFile(audioPath, audioBuffer);
-                break;
+                case 'elevenlabs': {
+                    const audioBuffer = await getAudioFromElevenLabs(text);
+                    if (!audioBuffer) {
+                        throw new Error('Failed to generate audio with ElevenLabs');
+                    }
+                    const timestamp = Date.now();
+                    const filePath = join(process.cwd(), 'tts', 'output', `elevenlabs_${timestamp}.mp3`);
+                    await require('fs/promises').writeFile(filePath, audioBuffer);
+                    return filePath;
+                }
+                
+                default:
+                    throw new Error(`Unsupported voice type: ${voiceType}`);
             }
-            
-            default:
-                throw new Error(`Unsupported voice type: ${voiceType}`);
-        }
+        })();
 
-        if (!audioPath || !existsSync(audioPath)) {
-            throw new Error('Failed to generate audio file');
-        }
+        // Wait for the first chunk to be ready
+        audioPath = await firstChunkPromise;
+        logger.debug('First audio chunk ready, starting playback');
 
-        // Create audio resource and play it
+        // Create audio resource and start playing
         const resource = createAudioResource(audioPath, {
             inputType: StreamType.Arbitrary,
             inlineVolume: true,
@@ -217,31 +220,31 @@ export async function speakInVoiceChannel(
 
         player.play(resource);
 
-        // Emit playbackStarted event when the player starts playing
-        player.once(AudioPlayerStatus.Playing, () => {
-            logger.debug('Audio playback started');
-            voiceEvents.emit('playbackStarted', adventureId);
-        });
-
-        // Wait for playback to complete
-        await new Promise<void>((resolve) => {
-            if (!player) {
-                resolve();
-                return;
+        // Set up event handlers for continuous playback
+        player.on(AudioPlayerStatus.Playing, () => {
+            if (!isPlaying) {
+                isPlaying = true;
+                logger.debug('Audio playback started');
+                voiceEvents.emit('playbackStarted', adventureId);
             }
-
-            player.once(AudioPlayerStatus.Idle, () => {
-                logger.debug('Audio playback completed');
-                resolve();
-            });
-
-            player.once('error', (error) => {
-                logger.error('Audio playback error:', error);
-                resolve();
-            });
         });
 
-        // Clean up
+        player.on(AudioPlayerStatus.Idle, () => {
+            // Only consider it complete when we've received the final audio
+            if (finalAudioPromise.hasOwnProperty('done')) {
+                logger.debug('Audio playback completed');
+                player?.stop();
+            }
+        });
+
+        // Wait for the final audio generation to complete
+        await finalAudioPromise;
+        (finalAudioPromise as any).done = true;
+
+        // Wait a bit to ensure all audio is played
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Clean up the generated audio file
         if (audioPath) {
             try {
                 await unlink(audioPath);
