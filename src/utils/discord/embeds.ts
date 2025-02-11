@@ -311,8 +311,8 @@ export async function sendFormattedResponse({
                     guild,
                     categoryId,
                     adventureId,
-                    voiceType,
-                    language
+                    language,
+                    voiceType
                 ).catch(error => {
                     logger.error('Error in voice playback:', error);
                     // On voice error, still send the embed

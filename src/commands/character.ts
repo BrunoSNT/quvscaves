@@ -4,15 +4,13 @@ import {
     ButtonBuilder,
     StringSelectMenuBuilder,
     Message,
-    MessageComponentInteraction,
     StringSelectMenuInteraction,
     ButtonInteraction,
     MessageActionRowComponentBuilder,
     TextChannel,
-    AutocompleteInteraction
 } from 'discord.js';
 import { prisma } from '../lib/prisma';
-import { generateStats, getRacialBonuses, calculateHealth, getStartingProficiencies, calculateMana, calculateArmorClass, getRaceSpeed } from '../utils/dice';
+import { getRacialBonuses, calculateHealth, getStartingProficiencies, calculateMana, calculateArmorClass, getRaceSpeed } from '../utils/dice';
 
 const RACES = ['Human', 'Elf', 'Dwarf', 'Halfling', 'Orc'];
 const CLASSES = ['Warrior', 'Mage', 'Rogue', 'Cleric', 'Ranger', 'Paladin'];

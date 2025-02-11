@@ -12,11 +12,6 @@ import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
 import { 
     SupportedLanguage, 
-    VoiceType, 
-    WorldStyle,
-    ToneStyle,
-    MagicLevel,
-    AdventurePrivacy
 } from '../../types/game';
 import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../config/voice';
 

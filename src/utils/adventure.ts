@@ -301,23 +301,3 @@ export async function updateAdventureMemory(adventureId: string, aiResponse: str
         logger.error('Error updating scene memory', { error: error instanceof Error ? error.message : error });
     }
 }
-
-export async function speakInVoiceChannel(
-    text: string,
-    guild: Guild,
-    categoryId: string,
-    adventureId: string,
-    voiceType: 'elevenlabs' | 'kokoro' = 'kokoro'
-): Promise<void> {
-    // Get the channel using the stored voice channel ID
-    const voiceChannel = guild.channels.cache.get(categoryId);
-    if (!voiceChannel || !voiceChannel.isVoiceBased()) {
-        throw new Error('Invalid voice channel');
-    }
-
-    // Continue with your voice connection logic here
-    // For example, connect to the channel and play the text:
-    // const connection = joinVoiceChannel({ ... });
-    // const audioResource = createAudioResource(text, { ... });
-    // connection.play(audioResource);
-} 

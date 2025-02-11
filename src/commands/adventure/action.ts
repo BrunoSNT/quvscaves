@@ -4,50 +4,10 @@ import { logger } from '../../utils/logger';
 import { getMessages } from '../../utils/language';
 import { SupportedLanguage, GameContext, GameState, CharacterClass, Character, WorldStyle, ToneStyle, MagicLevel } from '../../types/game';
 import { generateResponse } from '../../ai/gamemaster';
-import { speakInVoiceChannel } from '../../lib/voice';
-import { updateCharacterSheet, StatusEffect, ParsedEffects } from '../../utils';
-import { CombatManager } from '../../combat/manager';
-import { detectCombatTriggers, initiateCombat, getCombatState } from '../../combat/handlers/actions';
-import { CombatAction, CombatStatus } from '../../combat/types';
-import { getActiveAdventure, Adventure } from '../../lib/adventure';
-import { getCharacter, DBCharacter } from '../../lib/character';
+import { getActiveAdventure } from '../../lib/adventure';
 import { getAdventureMemory as getMemory } from '../../lib/memory';
 import { sendFormattedResponse } from '../../utils/discord/embeds';
-
-type AdventurePlayerWithCharacter = {
-    adventureId: string;
-    characterId: string;
-    character: {
-        userId: string;
-        id: string;
-        name: string;
-        class: string;
-        race: string;
-        level: number;
-        experience: number;
-        health: number;
-        maxHealth: number;
-        mana: number;
-        maxMana: number;
-        strength: number;
-        dexterity: number;
-        constitution: number;
-        intelligence: number;
-        wisdom: number;
-        charisma: number;
-        armorClass: number;
-        initiative: number;
-        speed: number;
-        proficiencies: string[];
-        languages: string[];
-        spells: any[];
-        abilities: any[];
-        inventory: any[];
-        user: {
-            discordId: string;
-        };
-    }
-};
+import { ParsedEffects, StatusEffect } from 'utils';
 
 export function parseEffects(effectsText: string): ParsedEffects {
     const effects: StatusEffect[] = [];

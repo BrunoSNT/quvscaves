@@ -1,5 +1,4 @@
 import { SupportedLanguage, GameContext } from '../types/game';
-import { getMessages } from './language';
 import { logger } from '../utils/logger';
 
 const prompts = {

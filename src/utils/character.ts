@@ -282,11 +282,3 @@ export interface GameCharacter extends Character {
     abilities?: Ability[];
     inventory?: Item[];
 }
-
-export interface AdventurePlayerWithCharacter {
-    id: string;
-    adventureId: string;
-    character: GameCharacter;
-    createdAt: Date;
-    updatedAt: Date;
-} 

@@ -5,7 +5,6 @@ import {
     REST,
     IntentsBitField as Intents,
     BaseGuildTextChannel,
-    EmbedBuilder
 } from 'discord.js';
 import { handleRegister } from './commands/register';
 import { handleHelp } from './commands/help';
@@ -32,10 +31,8 @@ import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel, Voic
 import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
 import { getAdventureMemory } from './commands/adventure/action';
 import { generateResponse } from './ai/gamemaster';
-import { getMessages } from './utils/language';
 import { sendFormattedResponse } from './utils/discord/embeds';
-import { speakInVoiceChannel } from './lib/voice';
-import chalk from 'chalk';
+
 
 // Suppress punycode deprecation warning
 process.removeAllListeners('warning');
@@ -69,21 +66,6 @@ type FriendRequest = {
         username: string;
         characters: any[];
     };
-};
-
-type Friend = {
-    friend: { characters: any[] };
-};
-
-type FriendOf = {
-    user: { characters: any[] };
-};
-
-type Character = {
-    name: string;
-    class: string;
-    level: number;
-    adventures: { adventure: { status: string } }[];
 };
 
 type Adventure = {
