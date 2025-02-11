@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import asyncio
+import base64
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -157,12 +158,17 @@ async def text_to_speech(request: TTSRequest):
         sf.write(buffer, combined_audio.cpu().numpy(), tts_engine.sample_rate, format='WAV') # Convert to numpy array
         buffer.seek(0)
 
+        # Base64 encode the text for headers
+        encoded_text = base64.b64encode(request.text.encode('utf-8')).decode('ascii')
+        
         # Return audio as streaming response (even though it's not truly streaming)
         return StreamingResponse(
             buffer,
             media_type="audio/wav",
             headers={
-                "Content-Disposition": "attachment; filename=output.wav"
+                "Content-Disposition": "attachment; filename=output.wav",
+                "X-TTS-Text-Base64": encoded_text,  # Use base64 encoded text
+                "X-TTS-Voice": request.voice
             }
         )
 

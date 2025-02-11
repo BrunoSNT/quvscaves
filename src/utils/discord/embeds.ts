@@ -1,4 +1,4 @@
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, BaseGuildTextChannel, Guild } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageActionRowComponentBuilder, BaseGuildTextChannel, Guild, TextChannel } from 'discord.js';
 import { ResponseSections } from '../adventure';
 import { SupportedLanguage } from '../../types/game';
 import { logger } from '../logger';
@@ -40,79 +40,6 @@ interface ActionButton {
     action: string;
 }
 
-export function createAdventureEmbed(
-    characterName: string,
-    action: string,
-    sections: ResponseSections,
-    language: SupportedLanguage
-): EmbedBuilder {
-    // Determine scene type from narrative content
-    const sceneType = sections.narration.toLowerCase().includes('forest') ? 'forest' :
-                     sections.narration.toLowerCase().includes('dungeon') ? 'dungeon' :
-                     sections.narration.toLowerCase().includes('town') ? 'town' : 'default';
-
-    const { thumbnail, color } = SCENE_ASSETS[sceneType];
-
-    const embed = new EmbedBuilder()
-        .setColor(color)
-        .setTitle(`🎭 ${characterName}'s Adventure`)
-        .setDescription(`**Last Action:** ${action}`)
-        .setThumbnail(thumbnail)
-        .setTimestamp();
-
-    // Add spacing
-    embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
-
-    // Add narration if present
-    if (sections.narration) {
-        embed.addFields({
-            name: `${SECTION_EMOJIS.narration} Narration`,
-            value: sections.narration,
-            inline: false
-        });
-        embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
-    }
-
-    // Add atmosphere if present
-    if (sections.atmosphere) {
-        embed.addFields({
-            name: `${SECTION_EMOJIS.atmosphere} Atmosphere`,
-            value: sections.atmosphere,
-            inline: false
-        });
-        embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
-    }
-
-    // Add effects if present
-    if (sections.effects) {
-        embed.addFields({
-            name: `${SECTION_EMOJIS.effects} Effects`,
-            value: sections.effects,
-            inline: false
-        });
-        embed.addFields({ name: '\u200B', value: '\u200B', inline: false });
-    }
-
-    // Add available actions if present
-    if (sections.actions.length > 0) {
-        embed.addFields({
-            name: `${SECTION_EMOJIS.actions} Available Actions`,
-            value: sections.actions.map(action => `• ${action}`).join('\n'),
-            inline: false
-        });
-    }
-
-    // Add decorative line
-    embed.addFields({ name: '\u200B', value: '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬', inline: false });
-
-    embed.setFooter({ 
-        text: language === 'pt-BR' ? '🎲 Use os botões abaixo para escolher sua próxima ação' : '🎲 Use the buttons below to choose your next action',
-        iconURL: 'https://i.imgur.com/AfFp7pu.png'
-    });
-
-    return embed;
-}
-
 export function createActionButtons(actions: string[]): ActionRowBuilder<MessageActionRowComponentBuilder>[] {
     const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
     
@@ -122,10 +49,14 @@ export function createActionButtons(actions: string[]): ActionRowBuilder<Message
         const groupActions = actions.slice(i, i + 5);
         
         groupActions.forEach((action) => {
-            const buttonLabel = action.length > 80 ? action.substring(0, 77) + '...' : action;
+            // Truncate action for button ID (Discord has a 100 char limit for customId)
+            const truncatedActionId = action.length > 75 ? action.substring(0, 75) + '...' : action;
+            // Truncate display label (Discord has an 80 char limit for button labels)
+            const buttonLabel = action.length > 77 ? action.substring(0, 74) + '...' : action;
+            
             row.addComponents(
                 new ButtonBuilder()
-                    .setCustomId(`action:${action}`)
+                    .setCustomId(`action:${truncatedActionId}`)
                     .setLabel(buttonLabel)
                     .setStyle(ButtonStyle.Primary)
                     .setEmoji('⚔️')
@@ -221,64 +152,98 @@ export async function sendFormattedResponse({
     categoryId,
     adventureId
 }: FormattedResponseOptions) {
-    // First send the player's action
-    await channel.send({
-        content: `🎭 **${characterName}**: ${action}`,
-        tts: false
-    });
-
     // Extract all sections
     const sections = extractSections(response, language);
 
-    // Create the main story embed
-    const storyEmbed = new EmbedBuilder()
-        .setColor('#2B2D31')
-        .setTitle('📖 Story Update')
+    // Determine scene type from narrative content
+    const sceneType = sections.narration.toLowerCase().includes('forest') ? 'forest' :
+                     sections.narration.toLowerCase().includes('dungeon') ? 'dungeon' :
+                     sections.narration.toLowerCase().includes('town') ? 'town' : 'default';
+
+    const { thumbnail, color } = SCENE_ASSETS[sceneType];
+
+    // Create the initial story embed with basic info
+    const initialEmbed = new EmbedBuilder()
+        .setColor(color)
+        .setTitle(`🎭 ${characterName}`)
+        .setDescription(action)
+        .setThumbnail(thumbnail)
         .setTimestamp();
 
-    // Add narrative content
-    if (sections.narration) {
-        storyEmbed.addFields({
-            name: '📜 Narration',
-            value: sections.narration,
-            inline: false
-        });
-    }
-
-    // Add atmosphere if present
-    if (sections.atmosphere) {
-        storyEmbed.addFields({
-            name: '🌟 Atmosphere',
-            value: sections.atmosphere,
-            inline: false
-        });
-    }
-
-    // Add effects if present
-    if (sections.effects) {
-        storyEmbed.addFields({
-            name: '✨ Effects',
-            value: sections.effects,
-            inline: false
-        });
-    }
-
-    // Add memory if present
-    if (sections.memory) {
-        storyEmbed.addFields({
-            name: '📜 Memory',
-            value: sections.memory,
-            inline: false
-        });
-    }
-
-    // Add footer
-    storyEmbed.setFooter({ 
-        text: language === 'pt-BR' 
-            ? 'Use /action para realizar uma ação personalizada'
-            : 'Use /action to perform a custom action',
-        iconURL: 'https://i.imgur.com/AfFp7pu.png'
+    // Send the initial embed
+    const initialMessage = await channel.send({
+        embeds: [initialEmbed]
     });
+
+    // Function to create and send the full embed
+    const updateWithFullEmbed = async () => {
+        // Create the full story embed
+        const storyEmbed = new EmbedBuilder()
+            .setColor(color)
+            .setTitle(`🎭 ${characterName}`)
+            .setDescription(action)
+            .setThumbnail(thumbnail)
+            .setTimestamp();
+
+        // Add spacing
+        storyEmbed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+
+        // Add narrative content
+        if (sections.narration) {
+            storyEmbed.addFields({
+                name: `${SECTION_EMOJIS.narration} Narration`,
+                value: sections.narration,
+                inline: false
+            });
+            storyEmbed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+        }
+
+        // Add atmosphere if present
+        if (sections.atmosphere) {
+            storyEmbed.addFields({
+                name: `${SECTION_EMOJIS.atmosphere} Atmosphere`,
+                value: sections.atmosphere,
+                inline: false
+            });
+            storyEmbed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+        }
+
+        // Add effects if present
+        if (sections.effects) {
+            storyEmbed.addFields({
+                name: `${SECTION_EMOJIS.effects} Effects`,
+                value: sections.effects,
+                inline: false
+            });
+            storyEmbed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+        }
+
+        // Add memory if present
+        if (sections.memory) {
+            storyEmbed.addFields({
+                name: `${SECTION_EMOJIS.memory} Memory`,
+                value: sections.memory,
+                inline: false
+            });
+            storyEmbed.addFields({ name: '\u200B', value: '\u200B', inline: false });
+        }
+
+        // Add decorative line
+        storyEmbed.addFields({ name: '\u200B', value: '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬', inline: false });
+
+        // Add footer
+        storyEmbed.setFooter({ 
+            text: language === 'pt-BR' 
+                ? '🎲 Use os botões abaixo para escolher sua próxima ação \n Use /action para uma ação customizada'
+                : '🎲 Use the buttons below to choose your next action \n Use /action for a custom action',
+            iconURL: 'https://i.imgur.com/AfFp7pu.png'
+        });
+
+        // Edit the initial message with the full embed
+        await initialMessage.edit({
+            embeds: [storyEmbed]
+        });
+    };
 
     // Start voice playback if enabled
     if (voiceType !== 'none' && guild && categoryId && adventureId) {
@@ -290,68 +255,53 @@ export async function sendFormattedResponse({
                     voiceType
                 });
 
-                // Create a promise that resolves when playback starts
-                const playbackPromise = new Promise<void>((resolve) => {
+                // Create a promise that resolves when playback starts or times out
+                const playbackStarted = new Promise<void>((resolve) => {
+                    const timeout = setTimeout(() => {
+                        logger.warn('Playback start timeout, updating embed anyway');
+                        resolve();
+                    }, 60000); // 60000 second timeout
+
                     voiceEvents.once('playbackStarted', (id) => {
                         if (id === adventureId) {
+                            clearTimeout(timeout);
                             logger.debug(`Received playbackStarted event for adventure: ${adventureId}`);
-                            // Send the story embed when playback starts
-                            channel.send({
-                                embeds: [storyEmbed],
-                                tts: voiceType === 'discord'
-                            });
                             resolve();
                         }
                     });
                 });
 
-                // Start voice playback (don't await it)
-                speakInVoiceChannel(
+                // Start voice playback
+                const playbackPromise = speakInVoiceChannel(
                     voiceText,
                     guild,
                     categoryId,
                     adventureId,
                     language,
-                    voiceType
+                    channel as TextChannel,
+                    characterName,
+                    action
                 ).catch(error => {
                     logger.error('Error in voice playback:', error);
-                    // On voice error, still send the embed
-                    channel.send({
-                        embeds: [storyEmbed],
-                        tts: false
-                    });
                 });
 
-                // Wait for playback to start or timeout after 5 seconds
-                await Promise.race([
-                    playbackPromise,
-                    new Promise<void>((resolve) => setTimeout(() => {
-                        logger.warn('Playback start timeout, sending embed anyway');
-                        resolve();
-                    }, 60000))
-                ]);
+                // Wait for playback to start before updating the embed
+                await playbackStarted;
+                await updateWithFullEmbed();
+                
+                // Wait for playback to complete
+                await playbackPromise;
             } else {
                 logger.debug('No narrative sections found for voice playback');
-                // If no voice text, just send the embed
-                await channel.send({
-                    embeds: [storyEmbed],
-                    tts: false
-                });
+                await updateWithFullEmbed();
             }
         } catch (voiceError) {
             logger.error('Error in voice playback:', voiceError);
-            // On voice error, still send the embed
-            await channel.send({
-                embeds: [storyEmbed],
-                tts: false
-            });
+            await updateWithFullEmbed();
         }
     } else {
-        // No voice playback, just send the embed
-        await channel.send({
-            embeds: [storyEmbed],
-            tts: false
-        });
+        // No voice playback, update embed immediately
+        await updateWithFullEmbed();
     }
 
     // Create and send action buttons if there are any

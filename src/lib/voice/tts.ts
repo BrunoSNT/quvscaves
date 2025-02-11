@@ -54,12 +54,36 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
             }
         );
 
+        // Get text information from headers
+        const ttsTextBase64 = response.headers['x-tts-text-base64'];
+        const ttsVoice = response.headers['x-tts-voice'];
+
+        // Decode base64 text if present
+        const ttsText = ttsTextBase64 
+            ? Buffer.from(ttsTextBase64, 'base64').toString('utf-8')
+            : text;
+
+        // Emit the text information
+        ttsEvents.emit('ttsStarted', {
+            text: ttsText,
+            voice: ttsVoice || options.voice || 'af_heart'
+        });
+
         // Save the audio file
         await writeFile(outputPath, response.data);
+
+        // Emit completion event
+        ttsEvents.emit('ttsCompleted', {
+            text: ttsText,
+            voice: ttsVoice || options.voice || 'af_heart',
+            outputPath
+        });
+
         return outputPath;
 
     } catch (error) {
         logger.error('Error in generateTTSAudio:', error);
+        ttsEvents.emit('ttsError', { error });
         throw error;
     }
 }

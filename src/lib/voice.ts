@@ -8,19 +8,27 @@ import {
     VoiceConnection,
     NoSubscriberBehavior
 } from '@discordjs/voice';
-import { Guild, VoiceChannel, ChannelType, CategoryChannel } from 'discord.js';
+import { Guild, VoiceChannel, ChannelType, CategoryChannel, TextChannel } from 'discord.js';
 import { logger } from '../utils/logger';
 import axios from 'axios';
-import { generateTTSAudio } from './voice/tts';
+import { generateTTSAudio, ttsEvents } from './voice/tts';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
+import { sendFormattedResponse } from '../utils/discord/embeds';
 
 // Create event emitter for voice events
 export const voiceEvents = new EventEmitter();
 
 const DISCONNECT_TIMEOUT = 15 * 60 * 1000; // 15 minutes
 const disconnectTimers = new Map<string, NodeJS.Timeout>();
+
+// Store active voice sessions
+const activeSessions = new Map<string, {
+    channel: TextChannel;
+    characterName: string;
+    action: string;
+}>();
 
 // Function to get audio from ElevenLabs
 async function getAudioFromElevenLabs(text: string): Promise<Buffer | null> {
@@ -63,12 +71,33 @@ export async function speakInVoiceChannel(
     guild: Guild,
     categoryId: string,
     adventureId: string,
-    language: string = 'en-US'
+    language: string = 'en-US',
+    channel?: TextChannel,
+    characterName?: string,
+    action?: string
 ) {
     let audioPath: string | null = null;
     let connection: VoiceConnection | null = null;
 
     try {
+        // Store session information if provided
+        if (channel && characterName && action) {
+            activeSessions.set(guild.id, {
+                channel,
+                characterName,
+                action
+            });
+        }
+
+        // Listen for TTS events
+        ttsEvents.once('ttsStarted', async ({ text: ttsText }) => {
+            const session = activeSessions.get(guild.id);
+            if (session && session.channel) {
+                // Just emit the event, don't send embed
+                voiceEvents.emit('playbackStarted', adventureId);
+            }
+        });
+
         // Find the Table voice channel
         const category = await guild.channels.fetch(categoryId) as CategoryChannel | null;
         if (!category) {
@@ -126,6 +155,7 @@ export async function speakInVoiceChannel(
         await new Promise((resolve, reject) => {
             player.on(AudioPlayerStatus.Playing, () => {
                 logger.debug('Audio playback started');
+                voiceEvents.emit('playbackStarted', adventureId);
             });
 
             player.on(AudioPlayerStatus.Idle, () => {

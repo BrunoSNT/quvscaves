@@ -31,35 +31,6 @@ export function extractSections(response: AIResponse): ResponseSections {
     };
 }
 
-export function createResponseEmbed(sections: ResponseSections, characterName: string): EmbedBuilder {
-    return new EmbedBuilder()
-        .setColor('#2B2D31')
-        .setTitle(`🎭 ${characterName}'s Adventure`)
-        .setDescription(sections.narration)
-        .addFields([
-            { 
-                name: '🌟 Atmosphere', 
-                value: sections.atmosphere || 'No atmosphere description', 
-                inline: false 
-            },
-            { 
-                name: '✨ Effects', 
-                value: sections.effects || 'No active effects', 
-                inline: false 
-            },
-            { 
-                name: '📜 Memory', 
-                value: '```json\n' + (sections.memory || '{}') + '\n```', 
-                inline: false 
-            }
-        ])
-        .setFooter({ 
-            text: '🎲 Choose your next action below', 
-            iconURL: 'https://i.imgur.com/AfFp7pu.png' 
-        })
-        .setTimestamp();
-}
-
 export function createActionButtons(actions: string[]): { rows: ActionRowBuilder<MessageActionRowComponentBuilder>[]; buttons: ActionButton[] } {
     // Filter and clean up actions
     const cleanedActions = actions
