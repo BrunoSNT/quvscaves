@@ -230,13 +230,13 @@ export async function sendFormattedResponse({
         }
 
         // Add decorative line
-        storyEmbed.addFields({ name: '\u200B', value: '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬', inline: false });
+        storyEmbed.addFields({ name: '\u200B', value: '____________________________', inline: false });
 
         // Add footer
         storyEmbed.setFooter({ 
             text: language === 'pt-BR' 
-                ? '🎲 Use os botões abaixo para escolher sua próxima ação \n Use /action para uma ação customizada'
-                : '🎲 Use the buttons below to choose your next action \n Use /action for a custom action',
+                ? '🔏  Use os botões abaixo para escolher sua próxima ação \n 🖋️ Use /action para uma ação customizada\n'
+                : '🔏 Use the buttons below to choose your next action \n 🖋️Use /action for a custom action\n',
             iconURL: 'https://i.imgur.com/AfFp7pu.png'
         });
 
