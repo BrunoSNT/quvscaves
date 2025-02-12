@@ -6,6 +6,7 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { writeFile } from 'fs/promises';
 import { mkdir } from 'fs/promises';
+import { ReadableStream } from 'stream/web';
 
 const SERVER_URL = 'http://localhost:8000';
 
@@ -31,26 +32,21 @@ export interface TTSOptions {
     speed?: number;
 }
 
-export async function generateTTSAudio(text: string, options: TTSOptions = {}): Promise<string> {
+export async function generateTTSAudio(text: string, options: TTSOptions = {}): Promise<ReadableStream> {
     try {
-        // Generate temporary file path
-        const timestamp = Date.now();
-        const outputDir = join(process.cwd(), 'tts', 'output');
-        const outputPath = join(outputDir, `output_${timestamp}.wav`);
-
-        // Create output directory if it doesn't exist
-        await mkdir(outputDir, { recursive: true });
-
-        // Request audio generation
+        // Normalize text by replacing newlines with spaces
+        const normalizedText = text.replace(/\s+/g, ' ').trim();
+        
+        // Request audio generation with streaming
         const response = await axios.post(
             `${SERVER_URL}/tts`,
             {
-                text,
+                text: normalizedText,
                 voice: options.voice || 'af_heart',
                 speed: options.speed || 1.0
             },
             {
-                responseType: 'arraybuffer'
+                responseType: 'stream'
             }
         );
 
@@ -61,7 +57,7 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
         // Decode base64 text if present
         const ttsText = ttsTextBase64 
             ? Buffer.from(ttsTextBase64, 'base64').toString('utf-8')
-            : text;
+            : normalizedText;
 
         // Emit the text information
         ttsEvents.emit('ttsStarted', {
@@ -69,18 +65,7 @@ export async function generateTTSAudio(text: string, options: TTSOptions = {}): 
             voice: ttsVoice || options.voice || 'af_heart'
         });
 
-        // Save the audio file
-        await writeFile(outputPath, response.data);
-
-        // Emit completion event
-        ttsEvents.emit('ttsCompleted', {
-            text: ttsText,
-            voice: ttsVoice || options.voice || 'af_heart',
-            outputPath
-        });
-
-        return outputPath;
-
+        return response.data;
     } catch (error) {
         logger.error('Error in generateTTSAudio:', error);
         ttsEvents.emit('ttsError', { error });

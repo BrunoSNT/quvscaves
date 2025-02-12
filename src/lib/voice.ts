@@ -16,6 +16,7 @@ import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { sendFormattedResponse } from '../utils/discord/embeds';
+import { Readable } from 'stream';
 
 // Create event emitter for voice events
 export const voiceEvents = new EventEmitter();
@@ -76,7 +77,6 @@ export async function speakInVoiceChannel(
     characterName?: string,
     action?: string
 ) {
-    let audioPath: string | null = null;
     let connection: VoiceConnection | null = null;
 
     try {
@@ -134,39 +134,55 @@ export async function speakInVoiceChannel(
 
         connection.subscribe(player);
 
-        // Generate audio
-        audioPath = await generateTTSAudio(text, {
+        // Get audio stream
+        const audioStream = await generateTTSAudio(text, {
             voice: language === 'pt-BR' ? 'pm_santa' : 'bm_lewis',
             speed: 1.0
         });
 
-        // Create and play audio resource
-        const resource = createAudioResource(audioPath, {
+        // Create and play audio resource from stream
+        const resource = createAudioResource(audioStream, {
             inputType: StreamType.Arbitrary,
-            inlineVolume: true
+            inlineVolume: true,
+            silencePaddingFrames: 0  // Reduce silence padding
         });
 
         if (resource.volume) {
             resource.volume.setVolume(1.0);
         }
 
-        // Play audio and wait for completion
+        // Play audio and handle events
         player.play(resource);
         await new Promise((resolve, reject) => {
+            let hasStarted = false;
+            
             player.on(AudioPlayerStatus.Playing, () => {
-                logger.debug('Audio playback started');
-                voiceEvents.emit('playbackStarted', adventureId);
+                if (!hasStarted) {
+                    hasStarted = true;
+                    logger.debug('Audio playback started');
+                    voiceEvents.emit('playbackStarted', adventureId);
+                }
             });
 
             player.on(AudioPlayerStatus.Idle, () => {
-                logger.debug('Audio playback completed');
-                resolve(null);
+                if (hasStarted) {
+                    logger.debug('Audio playback completed');
+                    resolve(null);
+                }
             });
 
             player.on('error', (error) => {
                 logger.error('Error playing audio:', error);
                 reject(error);
             });
+
+            // Add timeout to prevent hanging
+            setTimeout(() => {
+                if (!hasStarted) {
+                    logger.error('Audio playback timed out');
+                    reject(new Error('Audio playback timed out'));
+                }
+            }, 60000); // 60 second timeout
         });
 
         // Set disconnect timer
@@ -182,15 +198,6 @@ export async function speakInVoiceChannel(
     } catch (error) {
         logger.error('Error in speakInVoiceChannel:', error);
         throw error;
-    } finally {
-        // Clean up audio file
-        if (audioPath && existsSync(audioPath)) {
-            try {
-                await unlink(audioPath);
-            } catch (error) {
-                logger.error('Error cleaning up audio file:', error);
-            }
-        }
     }
 }
 

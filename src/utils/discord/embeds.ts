@@ -3,6 +3,7 @@ import { ResponseSections } from '../adventure';
 import { SupportedLanguage } from '../../types/game';
 import { logger } from '../logger';
 import { speakInVoiceChannel, voiceEvents } from '../../lib/voice';
+import { log } from 'console';
 
 // Scene assets configuration
 const SCENE_ASSETS = {
@@ -249,6 +250,8 @@ export async function sendFormattedResponse({
     if (voiceType !== 'none' && guild && categoryId && adventureId) {
         try {
             const voiceText = extractVoiceText(response);
+            logger.info('voiceText', voiceText);
+
             if (voiceText) {
                 logger.debug('Starting voice playback with text:', {
                     textLength: voiceText.length,

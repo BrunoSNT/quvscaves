@@ -125,53 +125,44 @@ async def text_to_speech_stream(request: TTSRequest):
         logger.error(f"Error in TTS generation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/tts")  # Keep the /tts endpoint for non-streaming requests
+@app.post("/tts")
 async def text_to_speech(request: TTSRequest):
     try:
         lang_code = get_lang_code(request.voice)
         if lang_code not in tts_engines:
             raise HTTPException(status_code=400, detail=f"Unsupported language for voice: {request.voice}")
-
+    
         tts_engine = tts_engines[lang_code]
         tts_engine.voice = request.voice
 
+        # Normalize text by replacing newlines with spaces and trimming
+        normalized_text = " ".join(request.text.split())
+        logger.info(f"Generating audio for text: {normalized_text}")
+        
         generator = tts_engine.kokoro(
-            request.text,
+            normalized_text,
             speed=request.speed,
             voice=request.voice
         )
-
-        # Process all chunks (non-streaming)
-        audio_chunks = []
-        for _, _, audio in generator:
-            if audio is not None: # Check for None
-                audio_chunks.append(audio)
-
-        if not audio_chunks:
-            raise RuntimeError("No audio was generated")
-
-        # Combine chunks
-        combined_audio = audio_chunks[0] if len(audio_chunks) == 1 else torch.cat(audio_chunks)
-
-        # Convert to WAV
-        buffer = io.BytesIO()
-        sf.write(buffer, combined_audio.cpu().numpy(), tts_engine.sample_rate, format='WAV') # Convert to numpy array
-        buffer.seek(0)
-
-        # Base64 encode the text for headers
-        encoded_text = base64.b64encode(request.text.encode('utf-8')).decode('ascii')
-        
-        # Return audio as streaming response (even though it's not truly streaming)
-        return StreamingResponse(
-            buffer,
-            media_type="audio/wav",
-            headers={
-                "Content-Disposition": "attachment; filename=output.wav",
-                "X-TTS-Text-Base64": encoded_text,  # Use base64 encoded text
-                "X-TTS-Voice": request.voice
-            }
-        )
-
+    
+        async def generate_audio():
+            # Only yield raw WAV bytes
+            for _, _, audio in generator:
+                if audio is not None:
+                    buffer = io.BytesIO()
+                    sf.write(buffer, audio.cpu().numpy(), tts_engine.sample_rate, format='WAV')
+                    buffer.seek(0)
+                    yield buffer.read()
+    
+        # Move TTS metadata to HTTP response headers
+        encoded_text = base64.b64encode(normalized_text.encode("utf-8")).decode("ascii")
+        response_headers = {
+            "X-TTS-Text-Base64": encoded_text,
+            "X-TTS-Voice": request.voice
+        }
+    
+        return StreamingResponse(generate_audio(), media_type="audio/wav", headers=response_headers)
+    
     except Exception as e:
         logger.error(f"Error in TTS generation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
