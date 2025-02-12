@@ -267,6 +267,7 @@ export async function sendFormattedResponse({
 
                     voiceEvents.once('playbackStarted', (id) => {
                         if (id === adventureId) {
+                            updateWithFullEmbed();
                             clearTimeout(timeout);
                             logger.debug(`Received playbackStarted event for adventure: ${adventureId}`);
                             resolve();
@@ -290,21 +291,16 @@ export async function sendFormattedResponse({
 
                 // Wait for playback to start before updating the embed
                 await playbackStarted;
-                await updateWithFullEmbed();
                 
                 // Wait for playback to complete
                 await playbackPromise;
             } else {
                 logger.debug('No narrative sections found for voice playback');
-                await updateWithFullEmbed();
             }
         } catch (voiceError) {
             logger.error('Error in voice playback:', voiceError);
-            await updateWithFullEmbed();
         }
     } else {
-        // No voice playback, update embed immediately
-        await updateWithFullEmbed();
     }
 
     // Create and send action buttons if there are any

@@ -89,15 +89,6 @@ export async function speakInVoiceChannel(
             });
         }
 
-        // Listen for TTS events
-        ttsEvents.once('ttsStarted', async ({ text: ttsText }) => {
-            const session = activeSessions.get(guild.id);
-            if (session && session.channel) {
-                // Just emit the event, don't send embed
-                voiceEvents.emit('playbackStarted', adventureId);
-            }
-        });
-
         // Find the Table voice channel
         const category = await guild.channels.fetch(categoryId) as CategoryChannel | null;
         if (!category) {
@@ -137,14 +128,15 @@ export async function speakInVoiceChannel(
         // Get audio stream
         const audioStream = await generateTTSAudio(text, {
             voice: language === 'pt-BR' ? 'pm_santa' : 'bm_lewis',
-            speed: 1.0
+            speed: 1.0,
+       
         });
 
         // Create and play audio resource from stream
-        const resource = createAudioResource(audioStream, {
-            inputType: StreamType.Arbitrary,
+        const resource = createAudioResource(audioStream as unknown as Readable, {
+            inputType: StreamType.WebmOpus,
             inlineVolume: true,
-            silencePaddingFrames: 0  // Reduce silence padding
+            silencePaddingFrames: 0
         });
 
         if (resource.volume) {
