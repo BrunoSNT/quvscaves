@@ -57,7 +57,7 @@ client.on(Events.InteractionCreate, async interaction => {
             } catch (error) {
                 await interaction.reply({
                     content: 'Invalid Solana wallet address. Please check and try again.',
-                    ephemeral: true
+                    flags: MessageFlags.Ephemeral
                 });
                 return;
             }
@@ -82,14 +82,14 @@ client.on(Events.InteractionCreate, async interaction => {
                     attachment: Buffer.from(qrCodeDataUrl.split(',')[1], 'base64'),
                     name: 'wallet-qr.png'
                 }],
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
 
         } catch (error) {
             console.error('Error linking wallet:', error);
             await interaction.reply({
                 content: 'There was an error linking your wallet. Please try again later.',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
     }

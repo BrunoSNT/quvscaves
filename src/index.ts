@@ -5,33 +5,36 @@ import {
     REST,
     IntentsBitField as Intents,
     BaseGuildTextChannel,
+    ChatInputCommandInteraction,
+    MessageFlags,
 } from 'discord.js';
-import { handleRegister } from './commands/register';
-import { handleHelp } from './commands/help';
-import { handleLinkWallet } from './commands/wallet';
-import { handleCreateCharacter, handleCharacterSetting } from './commands/character';
-import { handleStartAdventure } from './commands/adventure';
-import { handleListCharacters, handleListAdventures } from './commands/list';
-import { handleDeleteCharacter, handleDeleteAdventure } from './commands/delete';
-import { 
-    handleAddFriend, 
-    handleRemoveFriend, 
-    handleAcceptFriend, 
-    handleListFriendRequests 
-} from './commands/friend';
-import { prisma } from './lib/prisma';
-import { handleJoinAdventure } from './commands/adventure';
-import { handleListFriends } from './commands/friend';
-import { handlePlayerAction } from './commands/adventure';
-import { handleAdventureSettings } from './commands/adventure';
 import dotenv from 'dotenv';
-import { handleDisconnectVoice } from './commands/adventure';
-import { logger } from './utils/logger';
-import { GameContext, SupportedLanguage, WorldStyle, ToneStyle, MagicLevel, VoiceType } from './types/game';
-import { toGameCharacter, extractSuggestedActions, createActionButtons } from './commands/adventure/action';
-import { getAdventureMemory } from './commands/adventure/action';
+import { prisma } from './core/prisma';
+import { WorldStyle, ToneStyle, MagicLevel } from './shared/game/types';
 import { generateResponse } from './ai/gamemaster';
-import { sendFormattedResponse } from './utils/discord/embeds';
+import { sendFormattedResponse } from './shared/discord/embeds';
+import { Character } from './features/character/types';
+import { handleCreateCharacter } from './features/character/commands/create';
+import { handleCharacterSettings } from './features/character/commands/settings';
+import { handleListCharacters } from './features/character/commands/list';
+import { handleDeleteCharacter } from './features/character/commands/delete';
+import { handleAddFriend } from './features/social/commands/add';
+import { handleRemoveFriend } from './features/social/commands/remove';
+import { handleAcceptFriend } from './features/social/commands/accept';
+import { handleListFriends } from './features/social/commands/list';
+import { handleJoinAdventure } from './features/adventure/commands/join';
+import { handlePlayerAction } from './features/adventure/commands/action';
+import { handleListAdventures } from './features/adventure/commands/index';
+import { handleAdventureSettings } from './features/adventure/commands/settings';
+import { handleDeleteAdventure } from './features/adventure/commands/delete';
+import { handleCreateAdventure } from './features/adventure/commands/create';
+import { AdventureSettings } from './features/adventure/types';
+import { handleRegister } from './features/user/commands/register';
+import { handleHelp } from './features/user/commands/help';
+import { handleLinkWallet } from './features/wallet/commands/link';
+import { logger } from './shared/logger';
+import { SupportedLanguage } from './shared/i18n/types';
+import { GameContext } from './shared/game/types';
 
 
 // Suppress punycode deprecation warning
@@ -77,6 +80,12 @@ type Adventure = {
     };
     players: { character: { name: string } }[];
 };
+// Define an extended adventure type that includes the relations.
+interface ExtendedAdventure extends Adventure {
+  user: { id: string; username: string };
+  players: { character: { name: string } }[];
+  status: string;
+}
 
 const commands = [
     new SlashCommandBuilder()
@@ -291,7 +300,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 });
 
                 if (!user) {
-                    console.log('No user found');
+                    logger.warn(`No user found for Discord ID: ${interaction.user.id}`);
+                    await sendResponse([]);
                     return;
                 }
 
@@ -299,6 +309,13 @@ client.on(Events.InteractionCreate, async interaction => {
                 const currentInput = focusedOption.value;
                 const selectedCharacters = currentInput.split(/,\s*/).filter(Boolean);
                 const searchTerm = selectedCharacters[selectedCharacters.length - 1]?.toLowerCase() || '';
+
+                logger.debug('Create adventure autocomplete:', {
+                    currentInput,
+                    selectedCharacters,
+                    searchTerm,
+                    availableCharacters: user.characters.length
+                });
 
                 // Get only user's own characters
                 const availableCharacters = user.characters.filter(char => {
@@ -312,8 +329,8 @@ client.on(Events.InteractionCreate, async interaction => {
                     availableCharacters.slice(0, 25).map(char => ({
                         name: `${char.name} (${char.class})`,
                         value: selectedCharacters.length > 0
-                            ? [...selectedCharacters.slice(0, -1), char.name].join(', ')  // Keep all previous selections and add new one
-                            : char.name  // First selection
+                            ? [...selectedCharacters.slice(0, -1), char.id].join(', ')  // Use character ID instead of name
+                            : char.id  // Use character ID for first selection
                     }))
                 );
             }
@@ -345,11 +362,10 @@ client.on(Events.InteractionCreate, async interaction => {
                     // Get only friend's active adventures
                     const adventures = await prisma.adventure.findMany({
                         where: {
-                            status: 'ACTIVE',
                             user: {
                                 OR: [
                                     {
-                                        friends: {
+                                        friendRequestsSent: {
                                             some: {
                                                 friendId: user.id,
                                                 status: 'ACCEPTED'
@@ -357,7 +373,7 @@ client.on(Events.InteractionCreate, async interaction => {
                                         }
                                     },
                                     {
-                                        friendOf: {
+                                        friendRequestsReceived: {
                                             some: {
                                                 userId: user.id,
                                                 status: 'ACCEPTED'
@@ -378,7 +394,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     });
 
                     await sendResponse(
-                        adventures.map((adv: Adventure) => ({
+                        (adventures as Adventure[]).map(adv => ({
                             name: `${adv.name} - by ${adv.user.username} - Players: ${adv.players.map(p => p.character.name).join(', ')}`,
                             value: adv.id
                         }))
@@ -402,7 +418,9 @@ client.on(Events.InteractionCreate, async interaction => {
                     }
                 });
 
-                if (!user) return;
+                if (!user || user.adventures.length === 0) {
+                    return interaction.respond([]);
+                }
 
                 await sendResponse(
                     user.adventures.map(adv => ({
@@ -555,7 +573,6 @@ client.on(Events.InteractionCreate, async interaction => {
                 // Get the user's active adventure
                 const userAdventure = await prisma.adventure.findFirst({
                     where: { 
-                        status: 'ACTIVE',
                         players: {
                             some: {
                                 character: {
@@ -572,9 +589,8 @@ client.on(Events.InteractionCreate, async interaction => {
                                 character: {
                                     include: {
                                         user: true,
-                                        spells: true,
-                                        abilities: true,
-                                        inventory: true
+                                        CharacterSpell: true,
+                                        CharacterAbility: true
                                     }
                                 }
                             }
@@ -603,23 +619,101 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 // Create game context
                 const context: GameContext = {
-                    scene: '',  // Will be populated from memory
+                    scene: '',
                     playerActions: [action],
-                    characters: userAdventure.players.map(p => toGameCharacter(p.character)),
+                    characters: userAdventure.players.map(p => ({
+                        id: p.character.id,
+                        name: p.character.name,
+                        class: p.character.class,
+                        race: p.character.race,
+                        level: p.character.level,
+                        experience: p.character.experience,
+                        health: p.character.health,
+                        maxHealth: p.character.maxHealth,
+                        mana: p.character.mana,
+                        maxMana: p.character.maxMana,
+                        stats: p.character.stats as any,
+                        skills: p.character.skills as any,
+                        inventory: [],
+                        effects: [],
+                        userId: p.character.userId,
+                        createdAt: p.character.createdAt,
+                        updatedAt: p.character.updatedAt,
+                        strength: p.character.strength,
+                        dexterity: p.character.dexterity,
+                        constitution: p.character.constitution,
+                        intelligence: p.character.intelligence,
+                        wisdom: p.character.wisdom,
+                        charisma: p.character.charisma,
+                        proficiencies: p.character.proficiencies as string[],
+                        languages: p.character.languages as string[],
+                        spells: p.character.CharacterSpell.map(s => ({
+                            id: s.id,
+                            name: s.name,
+                            level: s.level,
+                            school: s.school,
+                            description: s.description,
+                            characterId: s.characterId
+                        })),
+                        abilities: p.character.CharacterAbility.map(a => ({
+                            id: a.id,
+                            name: a.name,
+                            type: a.type,
+                            description: a.description,
+                            uses: a.uses || undefined,
+                            recharge: a.recharge || undefined,
+                            characterId: a.characterId
+                        })),
+                        background: p.character.background || undefined
+                    })) as Character[],
                     currentState: {
                         health: userCharacter.health,
                         mana: userCharacter.mana,
                         inventory: [],
                         questProgress: userAdventure.status
                     },
-                    language: userAdventure.language as SupportedLanguage || 'en-US',
+                    language: userAdventure.language as SupportedLanguage,
                     adventureSettings: {
                         worldStyle: userAdventure.worldStyle as WorldStyle,
                         toneStyle: userAdventure.toneStyle as ToneStyle,
                         magicLevel: userAdventure.magicLevel as MagicLevel,
-                        setting: userAdventure.setting || undefined
+                        language: userAdventure.language as SupportedLanguage,
+                        useVoice: userAdventure.voiceType !== 'NONE'
                     },
-                    memory: await getAdventureMemory(userAdventure.id)
+                    memory: {
+                        recentScenes: [],
+                        activeQuests: [],
+                        knownCharacters: [],
+                        discoveredLocations: [],
+                        importantItems: []
+                    },
+                    adventure: {
+                        id: userAdventure.id,
+                        name: userAdventure.name,
+                        description: userAdventure.description || undefined,
+                        status: userAdventure.status,
+                        language: userAdventure.language,
+                        voiceType: userAdventure.voiceType,
+                        privacy: userAdventure.privacy,
+                        worldStyle: userAdventure.worldStyle as WorldStyle,
+                        toneStyle: userAdventure.toneStyle as ToneStyle,
+                        magicLevel: userAdventure.magicLevel as MagicLevel,
+                        categoryId: userAdventure.categoryId || undefined,
+                        textChannelId: userAdventure.textChannelId || undefined,
+                        settings: userAdventure.settings as unknown as AdventureSettings,
+                        players: userAdventure.players.map(p => ({
+                            id: p.id,
+                            adventureId: p.adventureId,
+                            characterId: p.characterId,
+                            userId: p.userId,
+                            username: p.username,
+                            joinedAt: p.joinedAt,
+                            characterName: p.character.name
+                        })),
+                        createdAt: userAdventure.createdAt,
+                        updatedAt: userAdventure.updatedAt,
+                        userId: userAdventure.userId
+                    }
                 };
 
                 // Generate AI response
@@ -635,7 +729,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 }
 
                 // Send formatted response
-                await sendFormattedResponse({
+                await sendFormattedResponse(interaction as unknown as ChatInputCommandInteraction, {
                     channel,
                     characterName: userCharacter.name,
                     action,
@@ -644,7 +738,9 @@ client.on(Events.InteractionCreate, async interaction => {
                     voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined,
                     guild: interaction.guild!,
                     categoryId: userAdventure.categoryId || undefined,
-                    adventureId: userAdventure.id
+                    adventureId: userAdventure.id,
+                    title: '',
+                    description: ''
                 });
 
                 await interaction.editReply({
@@ -655,7 +751,7 @@ client.on(Events.InteractionCreate, async interaction => {
             logger.error('Error handling button interaction:', error);
             await interaction.reply({ 
                 content: 'There was an error processing your action.', 
-                ephemeral: true 
+                flags: MessageFlags.Ephemeral
             });
         }
     }
@@ -677,7 +773,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 await handleCreateCharacter(interaction);
                 break;
             case 'create_adventure':
-                await handleStartAdventure(interaction);
+                await handleCreateAdventure(interaction);
                 break;
             case 'action':
                 await handlePlayerAction(interaction);
@@ -703,9 +799,6 @@ client.on(Events.InteractionCreate, async interaction => {
             case 'accept_friend':
                 await handleAcceptFriend(interaction);
                 break;
-            case 'list_friend_requests':
-                await handleListFriendRequests(interaction);
-                break;
             case 'join_adventure':
                 await handleJoinAdventure(interaction);
                 break;
@@ -715,11 +808,8 @@ client.on(Events.InteractionCreate, async interaction => {
             case 'adventure_settings':
                 await handleAdventureSettings(interaction);
                 break;
-            case 'disconnect_voice':
-                await handleDisconnectVoice(interaction);
-                break;
             case 'character_setting':
-                await handleCharacterSetting(interaction);
+                await handleCharacterSettings(interaction);
                 break;
             default:
                 // Handle unknown command
@@ -729,9 +819,9 @@ client.on(Events.InteractionCreate, async interaction => {
         console.error('Error handling command:', error);
         const errorMessage = 'There was an error executing this command.';
         if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: errorMessage, ephemeral: true });
+            await interaction.followUp({ content: errorMessage, flags: MessageFlags.Ephemeral });
         } else {
-            await interaction.reply({ content: errorMessage, ephemeral: true });
+            await interaction.reply({ content: errorMessage, flags: MessageFlags.Ephemeral });
         }
     }
 });

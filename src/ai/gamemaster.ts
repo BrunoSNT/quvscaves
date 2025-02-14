@@ -1,10 +1,11 @@
 import axios from 'axios';
-import { GameContext, SupportedLanguage } from '../types/game';
-import { logger } from '../utils/logger';
-import { getGamePrompt, buildContextString, createFallbackResponse } from '../utils/gamePrompts';
+import { GameContext } from '../shared/game/types';
+import { logger, prettyPrintLog } from '../shared/logger';
+import { getGamePrompt, buildContextString, createFallbackResponse } from '../shared/game/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 import util from 'util';
+import { SupportedLanguage } from '../shared/i18n/types';
 
 const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
 const AI_MODEL = 'qwen2.5:3b';
@@ -67,87 +68,164 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 `;
 }
 
-export async function* generateResponseStream(context: GameContext): AsyncGenerator<string> {
-    try {
+export async function generateResponse(context: GameContext): Promise<string> {
+    const spinner = ora({
+        text: chalk.cyan('Generating AI response...'),
+        spinner: 'dots12'
+    }).start();
+
+    const maxRetries = 2;
+    let retryCount = 0;
+
+    async function attemptResponse(retryReason?: string): Promise<string> {
         const language = context.language;
         const prompt = getGamePrompt(language);
         const contextStr = buildContextString(context, language);
 
-        logger.debug(chalk.cyan('Context:'), formatContext(context));
-        logger.debug(chalk.cyan('Sending request to AI:'), {
+        const reinforcementPrompt = retryReason ? `
+PREVIOUS RESPONSE WAS INVALID: ${retryReason}
+
+YOU MUST RESPOND WITH EXACTLY THIS JSON STRUCTURE:
+${language === 'en-US' ? `{
+    "narration": "Vivid description of environment and results of player actions",
+    "atmosphere": "Current mood, weather, and environmental details",
+    "available_actions": [
+        "Action 1 based on character abilities",
+        "Action 2 based on character abilities",
+        "Action 3 based on character abilities"
+    ]
+}` : `{
+    "narracao": "Descrição vívida do ambiente e resultados das ações do jogador",
+    "atmosfera": "Humor atual, clima e detalhes do ambiente",
+    "acoes_disponiveis": [
+        "Ação 1 baseada nas habilidades do personagem",
+        "Ação 2 baseada nas habilidades do personagem",
+        "Ação 3 baseada nas habilidades do personagem"
+    ]
+}`}
+
+REQUIREMENTS:
+1. MUST be valid JSON
+2. MUST include all fields exactly as shown
+3. NO additional fields or text
+4. NO formatting markers
+5. NO player prompts or questions
+6. 3-5 actions only
+7. Actions MUST match character abilities` : '';
+
+        logger.debug(chalk.cyan('Sending request to AI:'), prettyPrintLog(JSON.stringify({
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
-            language: language
-        });
-
-        const systemPrompt = `${prompt.system}
-
-# Tools
-
-You may call one or more functions to assist with the user query.
-
-Available tools:
-- updateCharacterStats: Update character's health, mana, or status effects
-- addInventoryItem: Add an item to character's inventory
-- createNPC: Create a new NPC in the scene
-- rollDice: Roll dice for skill checks or combat
-- updateQuestProgress: Update quest status and progress
-- createMemory: Create a new memory entry for significant events
-
-For each tool call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
-<tool_call>
-{"name": <function-name>, "arguments": <args-json-object>}
-</tool_call>`;
+            language,
+            retryCount,
+            retryReason
+        })));
 
         const response = await axios.post(AI_ENDPOINT, {
             model: AI_MODEL,
-            prompt: `<|im_start|>system
+            messages: [
+                {
+                    role: 'system',
+                    content: `${prompt.system}
 ${prompt.intro}
 
-${systemPrompt}
-<|im_end|>
-<|im_start|>user
+CURRENT GAME CONTEXT:
 ${contextStr}
-<|im_end|>
-<|im_start|>assistant
-`,
-            temperature: 0.7,
-            max_tokens: 2000,
+${reinforcementPrompt}
+
+RESPONSE FORMAT:
+You MUST respond with a valid JSON object. No other text or formatting is allowed.
+The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
+
+${language === 'en-US' ? `{
+    "narration": "Vivid description of environment and results of player actions",
+    "atmosphere": "Current mood, weather, and environmental details",
+    "available_actions": [
+        "Action 1 based on character abilities",
+        "Action 2 based on character abilities",
+        "Action 3 based on character abilities"
+    ]
+}` : `{
+    "narracao": "Descrição vívida do ambiente e resultados das ações do jogador",
+    "atmosfera": "Humor atual, clima e detalhes do ambiente",
+    "acoes_disponiveis": [
+        "Ação 1 baseada nas habilidades do personagem",
+        "Ação 2 baseada nas habilidades do personagem",
+        "Ação 3 baseada nas habilidades do personagem"
+    ]
+}`}`
+                },
+                {
+                    role: 'user',
+                    content: context.playerActions[0]
+                }
+            ],
+            temperature: 0.3,
+            max_tokens: 500,
             top_p: 0.9,
             repeat_penalty: 1.1,
             stop: ["<|im_end|>"],
-            stream: true
-        }, {
-            responseType: 'stream'
+            stream: false
         });
 
-        let currentChunk = '';
-        
-        for await (const chunk of response.data) {
-            const text = chunk.toString();
-            try {
-                const lines = text.split('\n').filter(Boolean);
-                for (const line of lines) {
-                    const json = JSON.parse(line);
-                    if (json.response) {
-                        currentChunk += json.response;
-                        // Yield when we have a complete sentence or significant chunk
-                        if (json.response.match(/[.!?]\s*$/)) {
-                            yield currentChunk;
-                            currentChunk = '';
-                        }
-                    }
-                }
-            } catch (e) {
-                logger.error('Error parsing chunk:', e);
+        let fullResponse = '';
+        if (typeof response.data === 'object') {
+            if (response.data.response) {
+                fullResponse = response.data.response;
+            } else if (response.data.choices && response.data.choices.length > 0) {
+                fullResponse = response.data.choices[0].message.content;
             }
+        } else if (typeof response.data === 'string') {
+            fullResponse = response.data;
         }
 
-        // Yield any remaining text
-        if (currentChunk) {
-            yield currentChunk;
+        // Clean up the response by removing any <|im_end|> tags and extra whitespace
+        fullResponse = fullResponse.replace(/<\|im_end\|>/g, '').trim();
+
+        // Try to extract JSON from the response if it's wrapped in other text
+        const jsonMatch = fullResponse.match(/{[\s\S]*}/);
+        if (jsonMatch) {
+            fullResponse = jsonMatch[0];
         }
 
+        return fullResponse;
+    }
+
+    try {
+        let response = await attemptResponse();
+        let validationError = validateResponseFormat(response, context.language);
+
+        while (!validationError.isValid && retryCount < maxRetries) {
+            retryCount++;
+            logger.warn(`Retry ${retryCount}/${maxRetries} due to: ${validationError.reason}`);
+            response = await attemptResponse(validationError.reason);
+            validationError = validateResponseFormat(response, context.language);
+        }
+
+        if (!validationError.isValid) {
+            logger.error('Failed to get valid response after retries:', prettyPrintLog(response));
+            // Return fallback JSON response
+            const fallbackResponse = context.language === 'en-US' ? {
+                narration: "The path ahead remains unclear, but your determination drives you forward...",
+                atmosphere: "A moment of uncertainty hangs in the air as you consider your next move.",
+                available_actions: [
+                    "Wait and observe your surroundings",
+                    "Proceed with caution",
+                    "Search for alternative paths"
+                ]
+            } : {
+                narracao: "O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...",
+                atmosfera: "Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.",
+                acoes_disponiveis: [
+                    "Aguardar e observar seus arredores",
+                    "Prosseguir com cautela",
+                    "Procurar por caminhos alternativos"
+                ]
+            };
+            return JSON.stringify(fallbackResponse, null, 2);
+        }
+
+        return response;
     } catch (error) {
         if (axios.isAxiosError(error)) {
             logger.error(chalk.red('API Error:'), {
@@ -158,122 +236,97 @@ ${contextStr}
         } else {
             logger.error(chalk.red('Error:'), error);
         }
-        yield createFallbackResponse(context);
-    }
-}
-
-// Keep the old function for compatibility, but make it use the stream
-export async function generateResponse(context: GameContext): Promise<string> {
-    const spinner = ora({
-        text: chalk.cyan('Generating AI response...'),
-        spinner: 'dots12'
-    }).start();
-
-    try {
-        let fullResponse = '';
-        for await (const chunk of generateResponseStream(context)) {
-            fullResponse += chunk;
-        }
-
-        if (!validateResponseFormat(fullResponse, context.language)) {
-            logger.error('Invalid AI response format:', fullResponse);
-            return createFallbackResponse(context);
-        }
-
-        return fullResponse;
+        // Return fallback JSON response
+        const fallbackResponse = context.language === 'en-US' ? {
+            narration: "The path ahead remains unclear, but your determination drives you forward...",
+            atmosphere: "A moment of uncertainty hangs in the air as you consider your next move.",
+            available_actions: [
+                "Wait and observe your surroundings",
+                "Proceed with caution",
+                "Search for alternative paths"
+            ]
+        } : {
+            narracao: "O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...",
+            atmosfera: "Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.",
+            acoes_disponiveis: [
+                "Aguardar e observar seus arredores",
+                "Prosseguir com cautela",
+                "Procurar por caminhos alternativos"
+            ]
+        };
+        return JSON.stringify(fallbackResponse, null, 2);
     } finally {
         spinner.stop();
     }
 }
 
-function validateResponseFormat(response: string, language: SupportedLanguage): boolean {
-    const requiredSections = language === 'en-US' 
-        ? {
-            narration: ['Narration', 'Narrative'],
-            atmosphere: ['Atmosphere', 'Environment'],
-            actions: ['Available Actions', 'Actions', 'Suggested Actions', 'Choices'],
-            memory: ['Memory', 'History']
-        }
-        : {
-            narration: ['Narração', 'Narrativa'],
-            atmosphere: ['Atmosfera', 'Ambiente'],
-            actions: ['Ações Disponíveis', 'Sugestões de Ação', 'Ações', 'Escolhas'],
-            memory: ['Memória', 'História']
-        };
-    
-    // Create patterns for required sections
-    const patterns = Object.entries(requiredSections).map(([type, names]) => ({
-        type,
-        patterns: names.map(name => `\\[${name}\\]([^\\[]*?)(?=\\[|$)`)
-    }));
+interface ValidationResult {
+    isValid: boolean;
+    reason?: string;
+}
 
-    // Check each section type and its content
-    const foundSections = patterns.map(({ type, patterns }) => {
-        // Try each possible pattern for this section type
-        for (const pattern of patterns) {
-            const match = response.match(new RegExp(pattern, 'i'));
-            if (match) {
-                // Check if section has actual content (not just whitespace)
-                const content = match[1]?.trim();
-                // For actions section, verify it has bullet points
-                if (type === 'actions' && content) {
-                    const hasChoices = content.split('\n')
-                        .some(line => line.trim().startsWith('-'));
-                    return { 
-                        type, 
-                        found: true,
-                        hasContent: hasChoices,
-                        content
-                    };
-                }
-                return { 
-                    type, 
-                    found: true,
-                    hasContent: !!content,
-                    content
-                };
+function validateResponseFormat(response: string, language: SupportedLanguage): ValidationResult {
+    try {
+        // Try to parse the response as JSON
+        const parsedResponse = JSON.parse(response);
+        
+        // Check if we have all required fields based on language
+        if (language === 'en-US') {
+            if (typeof parsedResponse.narration !== 'string') {
+                return { isValid: false, reason: 'Missing or invalid "narration" field - must be a string' };
+            }
+            if (typeof parsedResponse.atmosphere !== 'string') {
+                return { isValid: false, reason: 'Missing or invalid "atmosphere" field - must be a string' };
+            }
+            if (!Array.isArray(parsedResponse.available_actions)) {
+                return { isValid: false, reason: 'Missing or invalid "available_actions" field - must be an array' };
+            }
+            if (parsedResponse.available_actions.length < 3 || parsedResponse.available_actions.length > 5) {
+                return { isValid: false, reason: `Invalid number of actions: ${parsedResponse.available_actions.length} (must be 3-5)` };
+            }
+            if (!parsedResponse.available_actions.every((action: any) => typeof action === 'string')) {
+                return { isValid: false, reason: 'All actions must be strings' };
+            }
+        } else {
+            if (typeof parsedResponse.narracao !== 'string') {
+                return { isValid: false, reason: 'Campo "narracao" ausente ou inválido - deve ser uma string' };
+            }
+            if (typeof parsedResponse.atmosfera !== 'string') {
+                return { isValid: false, reason: 'Campo "atmosfera" ausente ou inválido - deve ser uma string' };
+            }
+            if (!Array.isArray(parsedResponse.acoes_disponiveis)) {
+                return { isValid: false, reason: 'Campo "acoes_disponiveis" ausente ou inválido - deve ser um array' };
+            }
+            if (parsedResponse.acoes_disponiveis.length < 3 || parsedResponse.acoes_disponiveis.length > 5) {
+                return { isValid: false, reason: `Número inválido de ações: ${parsedResponse.acoes_disponiveis.length} (deve ser 3-5)` };
+            }
+            if (!parsedResponse.acoes_disponiveis.every((action: any) => typeof action === 'string')) {
+                return { isValid: false, reason: 'Todas as ações devem ser strings' };
             }
         }
+
+        // Check for extra fields
+        const allowedFields = language === 'en-US' 
+            ? ['narration', 'atmosphere', 'available_actions']
+            : ['narracao', 'atmosfera', 'acoes_disponiveis'];
+        
+        const extraFields = Object.keys(parsedResponse).filter(key => !allowedFields.includes(key));
+        if (extraFields.length > 0) {
+            return { 
+                isValid: false, 
+                reason: language === 'en-US'
+                    ? `Extra fields not allowed: ${extraFields.join(', ')}`
+                    : `Campos extras não permitidos: ${extraFields.join(', ')}`
+            };
+        }
+
+        return { isValid: true };
+    } catch (error) {
         return { 
-            type, 
-            found: false,
-            hasContent: false,
-            content: null 
+            isValid: false, 
+            reason: language === 'en-US'
+                ? 'Failed to parse response as valid JSON'
+                : 'Falha ao analisar resposta como JSON válido'
         };
-    });
-
-    // Log validation details with more info about actions
-    const debugObj = {
-        sections: foundSections.map((s) => {
-            const status = s.found ? (s.hasContent ? '✓' : 'empty') : '✗';
-            const extra =
-                s.type === 'actions' && s.content
-                    ? ` (${s.content.split('\n').filter((l) => l.trim().startsWith('-')).length} choices)`
-                    : '';
-            return `${s.type}: ${status}${extra}`;
-        }),
-        required: ['narration', 'atmosphere', 'actions'].join(', '),
-        response: response
-    };
-    // Option 2: Using Node's util.inspect for possibly better formatting with colors
-    logger.debug(
-        `Response Validation:\n${util.inspect(debugObj, { depth: null, colors: true, compact: false })}`
-    );
-
-    // Must have required sections with content
-    const requiredTypes = ['narration', 'atmosphere', 'actions'];
-    const hasRequiredSections = requiredTypes.every(type => {
-        const section = foundSections.find(s => s.type === type);
-        return section?.found && section?.hasContent;
-    });
-
-    // Don't allow empty required sections
-    const hasEmptyRequiredSections = foundSections.some(s => 
-        s.found && !s.hasContent && requiredTypes.includes(s.type)
-    );
-
-    // Basic format check - must have proper section formatting
-    const hasSectionFormatting = /\[[^\]]+\]/.test(response);
-    
-    return hasRequiredSections && hasSectionFormatting && !hasEmptyRequiredSections;
+    }
 }

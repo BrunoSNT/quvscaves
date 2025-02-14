@@ -1,3 +1,6 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
 generator client {
   provider = "prisma-client-js"
   output   = "../prisma/client"
@@ -5,294 +8,155 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  url      = env("DATABASE_URL")
 }
 
-// Base model for users
 model User {
-  id            String        @id @default(cuid())
-  discordId     String        @unique
-  username      String
-  walletAddress String?       @unique
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  // Relations
-  adventures    Adventure[]
-  characters    Character[]
-  friends       Friendship[]  @relation("UserFriends")
-  friendOf      Friendship[]  @relation("FriendOf")
+  id                     String            @id @default(uuid())
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+  username               String
+  discordId              String            @unique
+  nickname               String?
+  walletAddress          String?
+  language               String            @default("en-US")
+  characters             Character[]
+  adventures             Adventure[]
+  friendRequestsSent     Friendship[]      @relation("FriendRequestsSent")
+  friendRequestsReceived Friendship[]      @relation("FriendRequestsReceived")
+  wallet                 Wallet?
+  adventurePlayers       AdventurePlayer[]
+
+  @@map("users")
 }
 
-// Character model
 model Character {
-  id          String            @id @default(cuid())
+  id               String             @id @default(uuid())
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  name             String
+  class            String
+  race             String
+  level            Int                @default(1)
+  experience       Int                @default(0)
+  health           Int                @default(100)
+  maxHealth        Int                @default(100)
+  mana             Int                @default(100)
+  maxMana          Int                @default(100)
+  stats            Json               @default("{}")
+  skills           Json               @default("{}")
+  inventory        Json               @default("[]")
+  effects          Json               @default("[]")
+  proficiencies    Json               @default("[]")
+  languages        Json               @default("[]")
+  spells           Json               @default("[]")
+  abilities        Json               @default("[]")
+  background       String?
+  strength         Int                @default(10)
+  dexterity        Int                @default(10)
+  constitution     Int                @default(10)
+  intelligence     Int                @default(10)
+  wisdom           Int                @default(10)
+  charisma         Int                @default(10)
+  userId           String
+  user             User               @relation(fields: [userId], references: [id])
+  adventures       AdventurePlayer[]
+  CharacterSpell   CharacterSpell[]
+  CharacterAbility CharacterAbility[]
+
+  @@map("characters")
+}
+
+model CharacterSpell {
+  id          String    @id @default(uuid())
   name        String
-  class       String
-  race        String
-  level       Int               @default(1)
-  experience  Int               @default(0)
-  
-  // Base Stats
-  strength     Int              @default(10)
-  dexterity    Int              @default(10)
-  constitution Int              @default(10)
-  intelligence Int              @default(10)
-  wisdom       Int              @default(10)
-  charisma     Int              @default(10)
-  
-  // Derived Stats
-  health      Int               @default(100)
-  maxHealth   Int               @default(100)
-  mana        Int               @default(100)
-  maxMana     Int               @default(100)
-  armorClass  Int               @default(10)
-  initiative  Int               @default(0)
-  speed       Int               @default(30)
-  
-  // Equipment and Skills
-  proficiencies String[]        @default([])
-  languages    String[]         @default([])
-  
-  // Background
-  background  String?           @db.Text
-  appearance  String?           @db.Text
-  personality String?           @db.Text
-  alignment   String?
-  
-  // Metadata
-  userId      String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  
-  // Relations
-  user        User              @relation(fields: [userId], references: [id])
-  adventures  AdventurePlayer[]
-  inventory   InventoryItem[]
-  spells      Spell[]
-  abilities   Ability[]
-  combats     CombatParticipant[]
-}
-
-// Adventure model
-model Adventure {
-  id            String            @id @default(cuid())
-  name          String
-  status        String            // ACTIVE, PAUSED, FINISHED
-  language      String            @default("en-US")
-  voiceType     String            @default("discord") // "discord" or "elevenlabs"
-  privacy       String            @default("public")  // "public", "friends_only", "private"
-  worldStyle    String            @default("high_fantasy") // high_fantasy, dark_fantasy, steampunk, etc
-  toneStyle     String            @default("heroic") // heroic, gritty, humorous, etc
-  magicLevel    String            @default("high") // high, low, none
-  setting       String?           @db.Text // Custom world setting description
-  userId        String
-  textChannelId String?
-  categoryId    String?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  // Relations
-  user          User              @relation(fields: [userId], references: [id])
-  players       AdventurePlayer[]
-  scenes        Scene[]
-  inventory     InventoryItem[]
-  combats       Combat[]
-  memories      AdventureMemory[]
-}
-
-// Joining table for adventures and characters
-model AdventurePlayer {
-  id          String    @id @default(cuid())
-  adventureId String
+  level       Int       @default(0)
+  school      String
+  description String    @db.Text
   characterId String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  // Relations
-  adventure   Adventure @relation(fields: [adventureId], references: [id])
   character   Character @relation(fields: [characterId], references: [id])
 
-  @@unique([adventureId, characterId])
+  @@map("character_spells")
 }
 
-// Scene model for adventure progress
-model Scene {
-  id          String    @id @default(cuid())
+model CharacterAbility {
+  id          String    @id @default(uuid())
   name        String
+  type        String
   description String    @db.Text
-  summary     String    @db.Text  // AI-generated summary of key events
+  uses        Int?
+  recharge    String?
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id])
+
+  @@map("character_abilities")
+}
+
+model Adventure {
+  id            String            @id @default(uuid())
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  name          String
+  description   String?
+  status        String            @default("ACTIVE")
+  language      String            @default("en-US")
+  voiceType     String            @default("NONE")
+  privacy       String            @default("public")
+  worldStyle    String            @default("FANTASY")
+  toneStyle     String            @default("CASUAL")
+  magicLevel    String            @default("MEDIUM")
+  categoryId    String?
+  textChannelId String?
+  settings      Json              @default("{}")
+  players       AdventurePlayer[]
+  userId        String
+  user          User              @relation(fields: [userId], references: [id])
+
+  @@map("adventures")
+}
+
+model AdventurePlayer {
+  id          String    @id @default(uuid())
   adventureId String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  // Relations
   adventure   Adventure @relation(fields: [adventureId], references: [id])
-  // Memory fields
-  keyEvents   String[]  // Important narrative events
-  npcInteractions Json? // Track NPC relationships and conversations
-  decisions   Json?    // Important player decisions
-  questProgress Json?  // Current state of active quests
-  locationContext String? @db.Text // Description of current location and its state
+  characterId String
+  character   Character @relation(fields: [characterId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  username    String
+  joinedAt    DateTime  @default(now())
+
+  @@map("adventure_players")
 }
 
-// Memory model for long-term narrative tracking
-model AdventureMemory {
-  id            String    @id @default(cuid())
-  adventureId   String
-  type          String    // QUEST, CHARACTER, LOCATION, ITEM, EVENT
-  title         String
-  description   String    @db.Text
-  importance    Int       // 1-5 scale of narrative importance
-  status        String    // ACTIVE, RESOLVED, ABANDONED
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  // Relations
-  adventure     Adventure @relation(fields: [adventureId], references: [id])
-  relatedMemories String[] // IDs of related memory entries
-  tags          String[]  // For categorization and quick lookup
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  BLOCKED
 }
 
-// Inventory items
-model InventoryItem {
-  id          String     @id @default(cuid())
-  name        String
-  type        String     // WEAPON, ARMOR, POTION, etc.
-  description String
-  adventureId String
-  characterId String?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-  // Relations
-  adventure   Adventure  @relation(fields: [adventureId], references: [id])
-  character   Character? @relation(fields: [characterId], references: [id])
-}
-
-// Friendship system
 model Friendship {
-  id        String   @id @default(cuid())
+  id        String           @id @default(uuid())
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  status    FriendshipStatus @default(PENDING)
   userId    String
   friendId  String
-  status    String   // PENDING, ACCEPTED, REJECTED
+  user      User             @relation("FriendRequestsSent", fields: [userId], references: [id])
+  friend    User             @relation("FriendRequestsReceived", fields: [friendId], references: [id])
+
+  @@map("friendships")
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  // Relations
-  user      User     @relation("UserFriends", fields: [userId], references: [id])
-  friend    User     @relation("FriendOf", fields: [friendId], references: [id])
+  updatedAt DateTime @default(now())
+  address   String   @unique
+  balance   Float    @default(0)
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
 
-  @@unique([userId, friendId])
+  @@map("wallets")
 }
-
-// Spell model
-model Spell {
-    id          String    @id @default(cuid())
-    name        String
-    level       Int       // 0 for cantrips
-    school      String    // e.g., Evocation, Abjuration, etc.
-    description String    @db.Text
-    castingTime String
-    range       String
-    duration    String
-    components  String[]
-    characterId String
-    character   Character @relation(fields: [characterId], references: [id])
-}
-
-// Ability model
-model Ability {
-    id          String    @id @default(cuid())
-    name        String
-    type        String    // class feature, racial trait, etc.
-    description String    @db.Text
-    uses        Int?      // null for unlimited uses
-    recharge    String?   // e.g., "short rest", "long rest"
-    characterId String
-    character   Character @relation(fields: [characterId], references: [id])
-}
-
-// Combat model
-model Combat {
-    id            String             @id @default(cuid())
-    adventureId   String
-    round         Int                @default(1)
-    currentTurn   Int                @default(0)
-    status        CombatStatus       // Using enum instead of string
-    createdAt     DateTime           @default(now())
-    updatedAt     DateTime           @updatedAt
-    // Relations
-    adventure     Adventure          @relation(fields: [adventureId], references: [id])
-    participants  CombatParticipant[]
-    log          CombatLog[]
-}
-
-enum CombatStatus {
-    ACTIVE
-    COMPLETED
-    FLED
-}
-
-// Combat participant model
-model CombatParticipant {
-    id            String             @id @default(cuid())
-    combatId      String
-    characterId   String
-    initiative    Int
-    isNPC         Boolean            @default(false)
-    createdAt     DateTime           @default(now())
-    updatedAt     DateTime           @updatedAt
-    // Relations
-    combat        Combat             @relation(fields: [combatId], references: [id])
-    character     Character          @relation(fields: [characterId], references: [id])
-    effects       StatusEffect[]
-}
-
-// Status effect model
-model StatusEffect {
-    id                  String             @id @default(cuid())
-    name                String
-    duration            Int
-    effectType          EffectType
-    effectTarget        EffectTarget
-    effectValue         Int
-    participantId       String
-    createdAt          DateTime            @default(now())
-    updatedAt          DateTime            @updatedAt
-    // Relations
-    participant        CombatParticipant   @relation(fields: [participantId], references: [id])
-}
-
-enum EffectType {
-    BUFF
-    DEBUFF
-    DAMAGE
-    HEAL
-}
-
-enum EffectTarget {
-    AC
-    ATTACK
-    DAMAGE
-    HEALTH
-    INITIATIVE
-}
-
-// Combat log model
-model CombatLog {
-    id            String             @id @default(cuid())
-    combatId      String
-    round         Int
-    turn          Int
-    actorId       String
-    targetId      String?
-    action        CombatAction
-    details       String             @db.Text
-    outcome       String             @db.Text
-    timestamp     DateTime           @default(now())
-    // Relations
-    combat        Combat             @relation(fields: [combatId], references: [id])
-}
-
-enum CombatAction {
-    ATTACK
-    CAST
-    DEFEND
-    USE_ITEM
-    FLEE
-} 

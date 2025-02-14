@@ -6,3 +6,5 @@ package-lock.json
 prisma/client
 pnpm-lock.yaml
 wow.txt
+tts/.DS_Store
+tts/__pycache__
