@@ -54,7 +54,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
         if (!user) {
             await interaction.reply({
                 content: 'Please register first using `/register`',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -69,7 +69,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
         if (existingCharacter) {
             await interaction.reply({
                 content: 'You already have a character with this name. Please try again with a different name.',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -90,7 +90,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
         const raceMsg = await interaction.reply({
             content: `Creating character: **${name}**\nChoose your race:`,
             components: [raceRow],
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
 
         try {
@@ -586,7 +586,7 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
         if (!user) {
             await interaction.reply({
                 content: 'Please register first using `/register`',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -604,7 +604,7 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
         if (!character) {
             await interaction.reply({
                 content: 'Character not found or you do not have permission to modify it.',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -637,7 +637,7 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
         const initialMessage = await interaction.reply({
             content: `Editing **${character.name}** (Level ${character.level} ${character.race} ${character.class})\n\nCurrent settings:\nBackground: ${character.background || '(Not set)'}\nAppearance: ${character.appearance || '(Not set)'}\nPersonality: ${character.personality || '(Not set)'}`,
             components: [settingRow],
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
 
         // Wait for setting type selection
@@ -693,12 +693,12 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
         if (!interaction.replied) {
             await interaction.reply({
                 content: 'Failed to update character setting. Please try again.',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         } else {
             await interaction.followUp({
                 content: 'Failed to update character setting. Please try again.',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
     }

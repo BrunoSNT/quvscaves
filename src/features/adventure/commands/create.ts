@@ -10,12 +10,9 @@ import {
     User
 } from 'discord.js';
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { AdventureService } from '../services/adventure';
 import { logger } from '../../../shared/logger';
-import { WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy } from '../../../shared/types/game';
-import { AdventureSettings } from '../types';
+import { VoiceType, WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy } from '../../../shared/game/types';
 import { prisma } from '../../../core/prisma';
-import { VoiceType } from '../../../shared/types/game';
 import { createCategoryChannel, createTextChannel, createPlayerChannels } from '../../../shared/discord/channels';
 import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../../features/voice/config/voice';
 import { SupportedLanguage } from '../../../shared/i18n/types';
@@ -40,7 +37,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
 
     try {
         logger.info('Deferring reply...');
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         logger.info('Reply deferred successfully');
 
         logger.info('Getting characters input...');
@@ -419,7 +416,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                 // Optionally, inform the user to join a voice channel if they're not connected
                 await interaction.followUp({
                     content: 'Please join a voice channel to be moved to the Table channel.',
-                    ephemeral: true
+                    flags: MessageFlags.Ephemeral
                 });
             }
             // Create the adventure with all settings
@@ -500,7 +497,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
             collector.on('collect', async i => {
                 try {
                     // First defer the reply
-                    await i.deferReply({ ephemeral: true });
+                    await i.deferReply({ flags: MessageFlags.Ephemeral });
 
                     // Get the character of the user who clicked
                     const userCharacter = characters.find(c => c.user.discordId === i.user.id);
@@ -583,7 +580,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                                 content: language === 'pt-BR'
                                     ? 'Erro ao processar a ação. Por favor, tente novamente.'
                                     : 'Error processing action. Please try again.',
-                                ephemeral: true
+                                flags: MessageFlags.Ephemeral
                             });
                         }
                     } catch (replyError) {

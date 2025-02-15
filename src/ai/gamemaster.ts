@@ -123,10 +123,8 @@ REQUIREMENTS:
 
         const response = await axios.post(AI_ENDPOINT, {
             model: AI_MODEL,
-            messages: [
-                {
-                    role: 'system',
-                    content: `${prompt.system}
+            prompt: `<|im_start|>system
+${prompt.system}
 ${prompt.intro}
 
 CURRENT GAME CONTEXT:
@@ -153,15 +151,15 @@ ${language === 'en-US' ? `{
         "Ação 2 baseada nas habilidades do personagem",
         "Ação 3 baseada nas habilidades do personagem"
     ]
-}`}`
-                },
-                {
-                    role: 'user',
-                    content: context.playerActions[0]
-                }
-            ],
+}`}
+<|im_end|>
+<|im_start|>user
+${context.playerActions[0]}
+<|im_end|>
+<|im_start|>assistant
+`,
             temperature: 0.3,
-            max_tokens: 500,
+            max_tokens: 800,
             top_p: 0.9,
             repeat_penalty: 1.1,
             stop: ["<|im_end|>"],
@@ -169,23 +167,28 @@ ${language === 'en-US' ? `{
         });
 
         let fullResponse = '';
-        if (typeof response.data === 'object') {
-            if (response.data.response) {
-                fullResponse = response.data.response;
-            } else if (response.data.choices && response.data.choices.length > 0) {
-                fullResponse = response.data.choices[0].message.content;
-            }
+        if (typeof response.data === 'object' && response.data.response) {
+            fullResponse = response.data.response;
         } else if (typeof response.data === 'string') {
             fullResponse = response.data;
         }
 
-        // Clean up the response by removing any <|im_end|> tags and extra whitespace
-        fullResponse = fullResponse.replace(/<\|im_end\|>/g, '').trim();
+        // Clean up the response
+        fullResponse = fullResponse
+            .replace(/<\|im_start\|>assistant/g, '')
+            .replace(/<\|im_end\|>/g, '')
+            .trim();
 
-        // Try to extract JSON from the response if it's wrapped in other text
-        const jsonMatch = fullResponse.match(/{[\s\S]*}/);
+        // Try to extract JSON from the response
+        const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-            fullResponse = jsonMatch[0];
+            try {
+                // Validate the extracted JSON is parseable
+                JSON.parse(jsonMatch[0]);
+                fullResponse = jsonMatch[0];
+            } catch {
+                // If parsing fails, keep the original cleaned response
+            }
         }
 
         return fullResponse;
@@ -197,13 +200,15 @@ ${language === 'en-US' ? `{
 
         while (!validationError.isValid && retryCount < maxRetries) {
             retryCount++;
-            logger.warn(`Retry ${retryCount}/${maxRetries} due to: ${validationError.reason}`);
+            logger.warn(`${chalk.yellow('⟲')} Retry ${retryCount}/${maxRetries}: ${validationError.reason}`);
             response = await attemptResponse(validationError.reason);
             validationError = validateResponseFormat(response, context.language);
         }
 
         if (!validationError.isValid) {
-            logger.error('Failed to get valid response after retries:', prettyPrintLog(response));
+            logger.error(`${chalk.red('✖')} Failed to get valid response after ${maxRetries} retries`);
+            logger.debug(`${chalk.gray('↳')} Last response: ${prettyPrintLog(response)}`);
+            
             // Return fallback JSON response
             const fallbackResponse = context.language === 'en-US' ? {
                 narration: "The path ahead remains unclear, but your determination drives you forward...",
@@ -222,20 +227,22 @@ ${language === 'en-US' ? `{
                     "Procurar por caminhos alternativos"
                 ]
             };
-            return JSON.stringify(fallbackResponse, null, 2);
+            return formatDiscordResponse(JSON.stringify(fallbackResponse, null, 2), context.language);
         }
 
-        return response;
+        logger.debug(`${chalk.green('✓')} Generated response: ${prettyPrintLog(response)}`);
+        return formatDiscordResponse(response, context.language);
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            logger.error(chalk.red('API Error:'), {
+            logger.error(`${chalk.red('✖')} API Error:`, {
                 status: error.response?.status,
                 message: error.message,
                 data: JSON.stringify(error.response?.data)
             });
         } else {
-            logger.error(chalk.red('Error:'), error);
+            logger.error(`${chalk.red('✖')} Error:`, error);
         }
+        
         // Return fallback JSON response
         const fallbackResponse = context.language === 'en-US' ? {
             narration: "The path ahead remains unclear, but your determination drives you forward...",
@@ -254,7 +261,7 @@ ${language === 'en-US' ? `{
                 "Procurar por caminhos alternativos"
             ]
         };
-        return JSON.stringify(fallbackResponse, null, 2);
+        return formatDiscordResponse(JSON.stringify(fallbackResponse, null, 2), context.language);
     } finally {
         spinner.stop();
     }
@@ -328,5 +335,37 @@ function validateResponseFormat(response: string, language: SupportedLanguage): 
                 ? 'Failed to parse response as valid JSON'
                 : 'Falha ao analisar resposta como JSON válido'
         };
+    }
+}
+
+interface GameOutput {
+    narration?: string;
+    atmosphere?: string;
+    available_actions?: string[];
+    narracao?: string;
+    atmosfera?: string;
+    acoes_disponiveis?: string[];
+}
+
+function formatDiscordResponse(response: string, language: SupportedLanguage): string {
+    try {
+        const gameOutput = JSON.parse(response) as GameOutput;
+        const isEnglish = language === 'en-US';
+
+        // Format sections
+        const narration = isEnglish ? gameOutput.narration : gameOutput.narracao;
+        const atmosphere = isEnglish ? gameOutput.atmosphere : gameOutput.atmosfera;
+        const actions = isEnglish ? gameOutput.available_actions : gameOutput.acoes_disponiveis;
+
+        // Build formatted output using Discord markdown
+        const sections = [
+            narration ? `📖 **${isEnglish ? 'Narration' : 'Narração'}**\n${narration}\n` : '',
+            atmosphere ? `🌍 **${isEnglish ? 'Atmosphere' : 'Atmosfera'}**\n${atmosphere}\n` : '',
+            actions?.length ? `⚔️ **${isEnglish ? 'Available Actions' : 'Ações Disponíveis'}**\n${actions.map(a => `• ${a}`).join('\n')}` : ''
+        ].filter(Boolean);
+
+        return sections.join('\n');
+    } catch {
+        return response;
     }
 }

@@ -188,7 +188,7 @@ export async function startAdventure(interaction: ChatInputCommandInteraction, a
 
     collector.on('collect', async i => {
         try {
-            await i.deferReply({ ephemeral: true });
+            await i.deferReply({ flags: MessageFlags.Ephemeral });
             const userCharacter = characters.find(c => c.user?.id === i.user.id);
             if (!userCharacter) {
                 await i.editReply({ 
@@ -246,7 +246,7 @@ export async function startAdventure(interaction: ChatInputCommandInteraction, a
                         content: language === 'pt-BR'
                             ? 'Erro ao processar a ação. Por favor, tente novamente.'
                             : 'Error processing action. Please try again.',
-                        ephemeral: true
+                        flags: MessageFlags.Ephemeral
                     });
                 }
             } catch (replyError) {
