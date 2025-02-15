@@ -1,14 +1,22 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../../prisma/client';
 import { logger } from '../shared/logger';
 
-const prisma = new PrismaClient({
+declare global {
+    var prisma: PrismaClient | undefined;
+}
+
+export const prisma = global.prisma || new PrismaClient({
     log: [
-        { emit: 'event', level: 'query' } as const,
-        { emit: 'event', level: 'error' } as const,
-        { emit: 'event', level: 'info' } as const,
-        { emit: 'event', level: 'warn' } as const,
+        { emit: 'event', level: 'query' },
+        { emit: 'event', level: 'error' },
+        { emit: 'event', level: 'info' },
+        { emit: 'event', level: 'warn' },
     ],
 });
+
+if (process.env.NODE_ENV !== 'production') {
+    global.prisma = prisma;
+}
 
 // Log queries in development
 if (process.env.NODE_ENV === 'development') {
@@ -19,6 +27,4 @@ if (process.env.NODE_ENV === 'development') {
 
 prisma.$on('error', (e) => {
     logger.error('Database error:', e);
-});
-
-export { prisma }; 
+}); 

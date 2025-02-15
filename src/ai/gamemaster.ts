@@ -85,7 +85,9 @@ export async function generateResponse(context: GameContext): Promise<string> {
         const reinforcementPrompt = retryReason ? `
 PREVIOUS RESPONSE WAS INVALID: ${retryReason}
 
-YOU MUST RESPOND WITH EXACTLY THIS JSON STRUCTURE:
+IMPORTANT: You MUST respond with ONLY a valid JSON object. Your last response was rejected.
+The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
+
 ${language === 'en-US' ? `{
     "narration": "Vivid description of environment and results of player actions",
     "atmosphere": "Current mood, weather, and environmental details",
@@ -105,21 +107,39 @@ ${language === 'en-US' ? `{
 }`}
 
 REQUIREMENTS:
-1. MUST be valid JSON
+1. MUST be valid JSON - NO markdown, NO formatting, ONLY JSON
 2. MUST include all fields exactly as shown
-3. NO additional fields or text
-4. NO formatting markers
+3. NO additional fields or text outside the JSON
+4. NO formatting markers or special characters
 5. NO player prompts or questions
 6. 3-5 actions only
-7. Actions MUST match character abilities` : '';
+7. Actions MUST match character abilities
+8. Response MUST be parseable as JSON
 
-        logger.debug(chalk.cyan('Sending request to AI:'), prettyPrintLog(JSON.stringify({
+YOUR TASK:
+1. Generate appropriate narrative content
+2. Format as JSON exactly as shown
+3. Return ONLY the JSON object
+
+EXAMPLE VALID RESPONSE:
+${JSON.stringify({
+    narration: "You carefully examine your surroundings, noting every detail that might reveal hidden dangers.",
+    atmosphere: "The air is thick with tension, and shadows seem to dance at the edge of your vision.",
+    available_actions: [
+        "Search methodically for traps",
+        "Move forward cautiously",
+        "Listen intently for any unusual sounds"
+    ]
+}, null, 2)}` : '';
+
+        logger.debug(chalk.cyan('Sending request to AI:'), {
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
             language,
             retryCount,
-            retryReason
-        })));
+            retryReason,
+            contextLength: contextStr.length
+        });
 
         const response = await axios.post(AI_ENDPOINT, {
             model: AI_MODEL,
@@ -184,11 +204,25 @@ ${context.playerActions[0]}
         if (jsonMatch) {
             try {
                 // Validate the extracted JSON is parseable
-                JSON.parse(jsonMatch[0]);
+                const parsed = JSON.parse(jsonMatch[0]);
+                // Additional validation to ensure all required fields are present
+                if (language === 'en-US') {
+                    if (!parsed.narration || !parsed.atmosphere || !Array.isArray(parsed.available_actions)) {
+                        throw new Error('Missing required fields in JSON response');
+                    }
+                } else {
+                    if (!parsed.narracao || !parsed.atmosfera || !Array.isArray(parsed.acoes_disponiveis)) {
+                        throw new Error('Campos obrigatórios ausentes na resposta JSON');
+                    }
+                }
                 fullResponse = jsonMatch[0];
-            } catch {
-                // If parsing fails, keep the original cleaned response
+            } catch (parseError: any) {
+                logger.error('Failed to parse or validate JSON response:', parseError, '\nResponse:', fullResponse);
+                throw new Error(`Invalid JSON response from AI: ${parseError.message}`);
             }
+        } else {
+            logger.error('No JSON found in response:', fullResponse);
+            throw new Error('No JSON found in AI response');
         }
 
         return fullResponse;
@@ -227,11 +261,11 @@ ${context.playerActions[0]}
                     "Procurar por caminhos alternativos"
                 ]
             };
-            return formatDiscordResponse(JSON.stringify(fallbackResponse, null, 2), context.language);
+            return JSON.stringify(fallbackResponse, null, 2);
         }
 
         logger.debug(`${chalk.green('✓')} Generated response: ${prettyPrintLog(response)}`);
-        return formatDiscordResponse(response, context.language);
+        return response;
     } catch (error) {
         if (axios.isAxiosError(error)) {
             logger.error(`${chalk.red('✖')} API Error:`, {
@@ -261,7 +295,7 @@ ${context.playerActions[0]}
                 "Procurar por caminhos alternativos"
             ]
         };
-        return formatDiscordResponse(JSON.stringify(fallbackResponse, null, 2), context.language);
+        return JSON.stringify(fallbackResponse, null, 2);
     } finally {
         spinner.stop();
     }

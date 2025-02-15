@@ -1,22 +1,66 @@
-import { ChatInputCommandInteraction, ButtonStyle, MessageFlags } from 'discord.js';
+import { ChatInputCommandInteraction, ButtonStyle, MessageFlags, VoiceChannel, ChannelType } from 'discord.js';
 import { AdventureService } from '../services/adventure';
-import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger, prettyPrintLog } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
 import { generateResponse } from '../../../ai/gamemaster';
 import { prisma } from '../../../core/prisma';
+import { VoiceConfig } from '../../voice/types';
+import { getVoiceService } from '../../voice/services';
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } from '@discordjs/voice';
+import { Readable } from 'stream';
 
 const adventureService = new AdventureService();
 
+async function playNarration(channel: VoiceChannel, texts: string[], config: VoiceConfig) {
+    try {
+        const voiceService = await getVoiceService(config.provider);
+        const connection = joinVoiceChannel({
+            channelId: channel.id,
+            guildId: channel.guild.id,
+            adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
+        });
+
+        const player = createAudioPlayer();
+        connection.subscribe(player);
+
+        // Play each text segment sequentially
+        for (const text of texts) {
+            if (!text.trim()) continue;
+            
+            logger.debug('Sending text to TTS:', text);
+            const audioBuffer = await voiceService.speak(text, config);
+            
+            const stream = Readable.from(audioBuffer);
+            const resource = createAudioResource(stream);
+            
+            player.play(resource);
+
+            // Wait for the current segment to finish before playing the next
+            await new Promise((resolve, reject) => {
+                player.on(AudioPlayerStatus.Idle, () => resolve(true));
+                player.on('error', (error) => {
+                    logger.error('Error playing audio segment:', error);
+                    reject(error);
+                });
+            });
+        }
+
+        return true;
+    } catch (error) {
+        logger.error('Error in playNarration:', error);
+        throw error;
+    }
+}
+
 export async function handlePlayerAction(interaction: ChatInputCommandInteraction) {
     try {
-        // Defer the reply immediately to prevent timeout
         await interaction.deferReply();
 
         const description = interaction.options.getString('description', true);
         logger.debug(`User ${interaction.user.id} invoked /action with description: ${description}`);
 
-        // First, get the database user
         const dbUser = await prisma.user.findUnique({
             where: { discordId: interaction.user.id }
         });
@@ -28,7 +72,6 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
             return;
         }
 
-        // Use the database user ID to find the adventure
         const adventure = await adventureService.getCurrentAdventure(dbUser.id);
         logger.debug(`Retrieved adventure for user ${dbUser.id}:`, adventure);
 
@@ -42,28 +85,88 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         try {
             const context = await adventureService.buildGameContext(adventure, description);
             const response = await generateResponse(context);
-            logger.debug('AI response:', prettyPrintLog(response));
+            logger.debug('Raw AI response:', response);
+            
             if (!response || typeof response !== 'string') {
                 throw new Error('Invalid AI response format');
             }
 
-            const suggestedActions = extractSuggestedActions(response);
-            const buttons = createActionButtons(suggestedActions);
+            // First parse the JSON response
+            let parsedResponse;
+            try {
+                parsedResponse = JSON.parse(response);
+            } catch (parseError) {
+                logger.error('Failed to parse AI response:', parseError);
+                throw new Error('Invalid JSON response from AI');
+            }
 
-            // Only include components if we have suggested actions
+            // Extract text for narration and atmosphere separately
+            const narrationText = context.language === 'en-US' 
+                ? parsedResponse.narration
+                : parsedResponse.narracao;
+            
+            const atmosphereText = context.language === 'en-US'
+                ? parsedResponse.atmosphere
+                : parsedResponse.atmosfera;
+
+            // Find the Table voice channel
+            const category = interaction.guild?.channels.cache.get(adventure.categoryId!);
+            if (category?.type === ChannelType.GuildCategory) {
+                const voiceChannel = category.children.cache.find(
+                    channel => channel.name.toLowerCase() === 'table' && 
+                    channel.type === ChannelType.GuildVoice
+                ) as VoiceChannel;
+
+                if (voiceChannel && adventure.voiceType !== 'NONE') {
+                    try {
+                        logger.info(`Attempting to join voice channel ${voiceChannel.name} in ${category.name}`);
+                        
+                        const voiceConfig: VoiceConfig = {
+                            provider: adventure.voiceType === 'ELEVENLABS' ? 'ELEVENLABS' : 
+                                     adventure.voiceType === 'KOKORO' ? 'KOKORO' : 'DISCORD',
+                            language: context.language,
+                            ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY
+                        };
+
+                        // Play narration and atmosphere as separate segments
+                        await playNarration(voiceChannel, [narrationText, atmosphereText], voiceConfig);
+                    } catch (voiceError) {
+                        logger.error('Error in voice playback:', voiceError);
+                    }
+                } else {
+                    if (!voiceChannel) {
+                        logger.warn('No "Table" voice channel found in category:', category.name);
+                    } else if (adventure.voiceType === 'NONE') {
+                        logger.debug('Voice is disabled for this adventure');
+                    }
+                }
+            } else {
+                logger.warn('No category found for adventure:', adventure.id);
+            }
+
+            // Format the response for Discord after JSON parsing
+            const formattedResponse = context.language === 'en-US' 
+                ? `📖 **Narration**\n${parsedResponse.narration}\n\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}\n\n⚔️ **Available Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}`
+                : `📖 **Narração**\n${parsedResponse.narracao}\n\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}\n\n⚔️ **Ações Disponíveis**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}`;
+
+            const suggestedActions = context.language === 'en-US'
+                ? parsedResponse.available_actions
+                : parsedResponse.acoes_disponiveis;
+
+            const buttons = createActionButtons(suggestedActions);
             const components = buttons.length > 0 ? [{
-                type: 1, // ActionRow
+                type: 1,
                 components: buttons
             }] : [];
 
             await interaction.editReply({
                 embeds: [{
                     title: '🎭 Action',
-                    description: response,
+                    description: formattedResponse,
                     color: 0x99ff99,
                     fields: [
                         {
-                            name: 'Your Action',
+                            name: context.language === 'en-US' ? 'Your Action' : 'Sua Ação',
                             value: description,
                             inline: true
                         }

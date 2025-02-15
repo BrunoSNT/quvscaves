@@ -7,7 +7,16 @@ import {
     BaseGuildTextChannel,
     ChatInputCommandInteraction,
     MessageFlags,
+    ChannelType,
+    VoiceChannel
 } from 'discord.js';
+import { 
+    joinVoiceChannel,
+    createAudioPlayer,
+    createAudioResource,
+    AudioPlayerStatus
+} from '@discordjs/voice';
+import { Readable } from 'stream';
 import dotenv from 'dotenv';
 import { prisma } from './core/prisma';
 import { WorldStyle, ToneStyle, MagicLevel } from './shared/game/types';
@@ -35,7 +44,8 @@ import { handleLinkWallet } from './features/wallet/commands/link';
 import { logger } from './shared/logger';
 import { SupportedLanguage } from './shared/i18n/types';
 import { GameContext } from './shared/game/types';
-
+import { VoiceConfig } from './features/voice/types';
+import { getVoiceService } from './features/voice/services';
 
 // Suppress punycode deprecation warning
 process.removeAllListeners('warning');
@@ -240,6 +250,18 @@ client.once(Events.ClientReady, async (c) => {
         logger.error('Error registering commands:', error);
     }
 });
+
+// Add this function before the client.on(Events.InteractionCreate) handler
+function createActionButtons(actions: string[]) {
+    if (!actions || actions.length === 0) return [];
+
+    return actions.slice(0, 5).map(action => ({
+        type: 2, // Button type
+        style: 1, // Primary style
+        label: action.substring(0, 80), // Discord button label limit
+        custom_id: `action:${action.substring(0, 80)}` // Limit custom_id length
+    }));
+}
 
 client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isAutocomplete()) {
@@ -718,34 +740,122 @@ client.on(Events.InteractionCreate, async interaction => {
 
                 // Generate AI response
                 const response = await generateResponse(context);
-
-                // Process the response using the existing handler
-                const channel = interaction.channel;
-                if (!channel || !(channel instanceof BaseGuildTextChannel)) {
-                    await interaction.editReply({
-                        content: 'This command can only be used in a server text channel.',
-                    });
-                    return;
+                if (!response || typeof response !== 'string') {
+                    throw new Error('Invalid AI response format');
                 }
 
-                // Send formatted response
-                await sendFormattedResponse(interaction as unknown as ChatInputCommandInteraction, {
-                    channel,
-                    characterName: userCharacter.name,
-                    action,
-                    response,
-                    language: userAdventure.language as SupportedLanguage,
-                    voiceType: userAdventure.voiceType as 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined,
-                    guild: interaction.guild!,
-                    categoryId: userAdventure.categoryId || undefined,
-                    adventureId: userAdventure.id,
-                    title: '',
-                    description: ''
+                // First parse the JSON response
+                let parsedResponse;
+                try {
+                    parsedResponse = JSON.parse(response);
+                } catch (parseError) {
+                    logger.error('Failed to parse AI response:', parseError);
+                    throw new Error('Invalid JSON response from AI');
+                }
+
+                // Extract text for narration and atmosphere separately
+                const narrationText = context.language === 'en-US' 
+                    ? parsedResponse.narration
+                    : parsedResponse.narracao;
+                
+                const atmosphereText = context.language === 'en-US'
+                    ? parsedResponse.atmosphere
+                    : parsedResponse.atmosfera;
+
+                // Find the Table voice channel if voice is enabled
+                if (userAdventure.voiceType !== 'NONE' && interaction.guild) {
+                    const category = interaction.guild.channels.cache.get(userAdventure.categoryId!);
+                    if (category?.type === ChannelType.GuildCategory) {
+                        const voiceChannel = category.children.cache.find(
+                            channel => channel.name.toLowerCase() === 'table' && 
+                            channel.type === ChannelType.GuildVoice
+                        ) as VoiceChannel;
+
+                        if (voiceChannel) {
+                            try {
+                                logger.info(`Attempting to join voice channel ${voiceChannel.name} in ${category.name}`);
+                                
+                                const voiceConfig: VoiceConfig = {
+                                    provider: userAdventure.voiceType === 'ELEVENLABS' ? 'ELEVENLABS' : 
+                                             userAdventure.voiceType === 'KOKORO' ? 'KOKORO' : 'DISCORD',
+                                    language: context.language,
+                                    ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY
+                                };
+
+                                // Get voice service and join channel
+                                const voiceService = await getVoiceService(voiceConfig.provider);
+                                const connection = joinVoiceChannel({
+                                    channelId: voiceChannel.id,
+                                    guildId: voiceChannel.guild.id,
+                                    adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+                                    selfDeaf: false,
+                                    selfMute: false
+                                });
+
+                                const player = createAudioPlayer();
+                                connection.subscribe(player);
+
+                                // Play narration and atmosphere sequentially
+                                for (const text of [narrationText, atmosphereText]) {
+                                    if (!text.trim()) continue;
+                                    
+                                    logger.debug('Sending text to TTS:', text);
+                                    const audioBuffer = await voiceService.speak(text, voiceConfig);
+                                    
+                                    const stream = Readable.from(audioBuffer);
+                                    const resource = createAudioResource(stream);
+                                    
+                                    player.play(resource);
+
+                                    // Wait for the current segment to finish
+                                    await new Promise((resolve, reject) => {
+                                        player.on(AudioPlayerStatus.Idle, () => resolve(true));
+                                        player.on('error', (error) => {
+                                            logger.error('Error playing audio segment:', error);
+                                            reject(error);
+                                        });
+                                    });
+                                }
+                            } catch (voiceError) {
+                                logger.error('Error in voice playback:', voiceError);
+                            }
+                        }
+                    }
+                }
+
+                // Format the response for Discord
+                const formattedResponse = context.language === 'en-US' 
+                    ? `📖 **Narration**\n${parsedResponse.narration}\n\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}\n\n⚔️ **Available Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}`
+                    : `📖 **Narração**\n${parsedResponse.narracao}\n\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}\n\n⚔️ **Ações Disponíveis**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}`;
+
+                const suggestedActions = context.language === 'en-US'
+                    ? parsedResponse.available_actions
+                    : parsedResponse.acoes_disponiveis;
+
+                const buttons = createActionButtons(suggestedActions);
+                const components = buttons.length > 0 ? [{
+                    type: 1,
+                    components: buttons
+                }] : [];
+
+                // Send the response
+                await interaction.editReply({
+                    embeds: [{
+                        title: '🎭 Action',
+                        description: formattedResponse,
+                        color: 0x99ff99,
+                        fields: [
+                            {
+                                name: 'Your Action',
+                                value: action,
+                                inline: true
+                            }
+                        ]
+                    }],
+                    components: components
                 });
 
-                await interaction.editReply({
-                    content: '✨ Ação processada!'
-                });
+                logger.info(`Button action processed for adventure ${userAdventure.id}`);
             }
         } catch (error) {
             logger.error('Error handling button interaction:', error);
