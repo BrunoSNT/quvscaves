@@ -1,5 +1,5 @@
 import { prisma } from '../../../core/prisma';
-import { Adventure, AdventureSettings } from '../types';
+import { Adventure, AdventureSettings, WorldStyle, ToneStyle, MagicLevel } from '../types';
 import { logger } from '../../../shared/logger';
 import { Character } from '../../character/types';
 import { Prisma } from '@prisma/client';
@@ -241,8 +241,15 @@ export class AdventureService {
                 inventory: [],
                 questProgress: ''
             },
-            adventureSettings: adventure.settings as AdventureSettings,
-            language: (adventure.settings.language as SupportedLanguage) || 'en-US',
+            adventureSettings: {
+                worldStyle: adventure.worldStyle as WorldStyle,
+                toneStyle: adventure.toneStyle as ToneStyle,
+                magicLevel: adventure.magicLevel as MagicLevel,
+                language: adventure.language as SupportedLanguage,
+                useVoice: adventure.voiceType !== 'NONE',
+                ...adventure.settings
+            },
+            language: adventure.language as SupportedLanguage,
             memory: {
                 recentScenes: [],
                 activeQuests: [],
@@ -314,22 +321,38 @@ export class AdventureService {
             ...adventure,
             description: adventure.description || undefined,
             settings: adventure.settings as AdventureSettings,
-            players: adventure.players
-        }
+            worldStyle: adventure.worldStyle as WorldStyle,
+            toneStyle: adventure.toneStyle as ToneStyle,
+            magicLevel: adventure.magicLevel as MagicLevel,
+        };
     }
 
     private mapToCharacter(character: any): Character {
         return {
             ...character,
             stats: character.stats as GameStats,
-            skills: character.skills as any,
-            inventory: character.inventory as any[],
-            effects: character.effects as any[],
+            inventory: character.inventory as string[],
+            effects: character.effects as string[],
             proficiencies: character.proficiencies as string[],
             languages: character.languages as string[],
-            spells: character.CharacterSpell,
-            abilities: character.CharacterAbility,
-            background: character.background || undefined,
+            spells: character.CharacterSpell?.map((s: any) => ({
+                id: s.id,
+                name: s.name,
+                level: s.level,
+                school: s.school,
+                description: s.description,
+                characterId: s.characterId
+            })) || [],
+            abilities: character.CharacterAbility?.map((a: any) => ({
+                id: a.id,
+                name: a.name,
+                type: a.type,
+                description: a.description,
+                uses: a.uses || undefined,
+                recharge: a.recharge || undefined,
+                characterId: a.characterId
+            })) || [],
+            background: character.background || undefined
         };
     }
 } 
