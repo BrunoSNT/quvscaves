@@ -15,7 +15,7 @@ import chalk from 'chalk';
 const adventureService = new AdventureService();
 
 // @ts-ignore - Discord.js types issue with VoiceChannel
-async function playNarration(channel: GuildVoiceChannelResolvable, texts: string[], config: VoiceConfig): Promise<boolean> {
+async function playNarration(channel: GuildVoiceChannelResolvable, texts: string[], config: VoiceConfig): Promise<{ startedPlaying: Promise<void>, finished: Promise<void> }> {
     try {
         const voiceService = await getVoiceService(config.provider);
         const connection: VoiceConnection = joinVoiceChannel({
@@ -29,27 +29,81 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
         const player = createAudioPlayer();
         connection.subscribe(player);
 
-        for (const text of texts) {
-            if (!text.trim()) continue;
+        // Start first TTS request immediately
+        const firstTextPromise = texts[0]?.trim() 
+            ? voiceService.speak(texts[0], config)
+            : Promise.resolve(null);
+
+        // Start second TTS request after 2 seconds
+        const secondTextPromise = new Promise<Buffer | null>((resolve) => {
+            setTimeout(async () => {
+                if (texts[1]?.trim()) {
+                    try {
+                        const buffer = await voiceService.speak(texts[1], config);
+                        resolve(buffer);
+                    } catch (error) {
+                        logger.error('Error generating second audio:', error);
+                        resolve(null);
+                    }
+                } else {
+                    resolve(null);
+                }
+            }, 2000);
+        });
+
+        // Wait for both audio buffers
+        const [firstBuffer, secondBuffer] = await Promise.all([
+            firstTextPromise,
+            secondTextPromise
+        ]);
+
+        const audioBuffers = [firstBuffer, secondBuffer].filter(buffer => buffer !== null);
+
+        let currentIndex = 0;
+        const playNextSegment = async () => {
+            if (currentIndex >= audioBuffers.length) return;
             
-            logger.debug('Sending text to TTS:', text);
-            const audioBuffer = await voiceService.speak(text, config);
+            const audioBuffer = audioBuffers[currentIndex];
+            if (!audioBuffer) {
+                currentIndex++;
+                return playNextSegment();
+            }
             
             const stream = Readable.from(audioBuffer);
             const resource = createAudioResource(stream);
             
             player.play(resource);
+            currentIndex++;
+        };
 
-            await new Promise<void>((resolve, reject) => {
-                player.on(AudioPlayerStatus.Idle, () => resolve());
-                player.on('error', (error) => {
-                    logger.error('Error playing audio segment:', error);
-                    reject(error);
-                });
+        // Create promises for both start and completion
+        const startedPlaying = new Promise<void>((resolve, reject) => {
+            player.once(AudioPlayerStatus.Playing, () => resolve());
+            player.once('error', (error) => reject(error));
+        });
+
+        const finished = new Promise<void>((resolve, reject) => {
+            let segmentsPlayed = 0;
+            
+            player.on(AudioPlayerStatus.Idle, () => {
+                segmentsPlayed++;
+                if (segmentsPlayed < audioBuffers.length) {
+                    playNextSegment();
+                } else {
+                    resolve();
+                }
             });
-        }
+            
+            player.on('error', (error) => {
+                logger.error('Error playing audio segment:', error);
+                reject(error);
+            });
+        });
 
-        return true;
+        // Start playing the first segment
+        await playNextSegment();
+
+        return { startedPlaying, finished };
     } catch (error) {
         logger.error('Error in playNarration:', error);
         throw error;
@@ -97,16 +151,8 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
             ? parsedResponse.available_actions
             : parsedResponse.acoes_disponiveis;
 
-        // Display the response text without buttons in a new message
-        const responseMessage = await channel.send({
-            embeds: [{
-                title: '🎭 Action Result',
-                description: formattedResponse,
-                color: 0x99ff99,
-            }]
-        });
-
         // Handle voice if enabled
+        let voicePromises = { startedPlaying: Promise.resolve(), finished: Promise.resolve() };
         if (context.adventure?.voiceType !== 'NONE' && interaction.guild && context.adventure?.categoryId) {
             const category = interaction.guild.channels.cache.get(context.adventure.categoryId);
             if (category?.type === ChannelType.GuildCategory) {
@@ -126,30 +172,92 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                             ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY
                         };
 
-                        await playNarration(voiceChannel, [narrationText, atmosphereText], voiceConfig);
+                        const voiceService = await getVoiceService(voiceConfig.provider);
+                        const connection: VoiceConnection = joinVoiceChannel({
+                            channelId: voiceChannel.id,
+                            guildId: voiceChannel.guild.id,
+                            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+                            selfDeaf: false,
+                            selfMute: false
+                        });
+
+                        const player = createAudioPlayer();
+                        connection.subscribe(player);
+
+                        // Start first TTS request immediately
+                        const firstBuffer = await voiceService.speak(narrationText, voiceConfig);
+                        
+                        if (firstBuffer) {
+                            const stream = Readable.from(firstBuffer);
+                            const resource = createAudioResource(stream);
+                            player.play(resource);
+
+                            // Create promises for both start and completion
+                            voicePromises.startedPlaying = new Promise<void>((resolve, reject) => {
+                                player.once(AudioPlayerStatus.Playing, () => resolve());
+                                player.once('error', (error) => reject(error));
+                            });
+
+                            // Display the response text without buttons
+                            const responseMessage = await channel.send({
+                                embeds: [{
+                                    title: '🎭 Action Result',
+                                    description: formattedResponse,
+                                    color: 0x99ff99,
+                                }]
+                            });
+
+                            // After first audio starts and embed is sent, start second TTS request
+                            await voicePromises.startedPlaying;
+
+                            // Now process the second text
+                            if (atmosphereText?.trim()) {
+                                const secondBuffer = await voiceService.speak(atmosphereText, voiceConfig);
+                                
+                                if (secondBuffer) {
+                                    voicePromises.finished = new Promise<void>((resolve, reject) => {
+                                        player.once(AudioPlayerStatus.Idle, () => {
+                                            const stream = Readable.from(secondBuffer);
+                                            const resource = createAudioResource(stream);
+                                            player.play(resource);
+                                            
+                                            player.once(AudioPlayerStatus.Idle, () => resolve());
+                                            player.once('error', (error) => reject(error));
+                                        });
+                                    });
+                                }
+                            }
+
+                            // Wait for all audio to finish before adding buttons
+                            try {
+                                await voicePromises.finished;
+                            } catch (error) {
+                                logger.error('Error waiting for voice playback to finish:', error);
+                            }
+
+                            // Add the action buttons
+                            const buttons = createActionButtons(suggestedActions);
+                            const components = buttons.length > 0 ? [{
+                                type: 1,
+                                components: buttons
+                            }] : [];
+
+                            // Edit the response message to add buttons
+                            await responseMessage.edit({
+                                embeds: [{
+                                    title: '🎭 Action Result',
+                                    description: formattedResponse,
+                                    color: 0x99ff99,
+                                }],
+                                components: components
+                            });
+                        }
                     } catch (voiceError) {
                         logger.error('Error in voice playback:', voiceError);
                     }
                 }
             }
         }
-
-        // After voice playback (or if no voice), add the action buttons
-        const buttons = createActionButtons(suggestedActions);
-        const components = buttons.length > 0 ? [{
-            type: 1,
-            components: buttons
-        }] : [];
-
-        // Edit the response message to add buttons
-        await responseMessage.edit({
-            embeds: [{
-                title: '🎭 Action Result',
-                description: formattedResponse,
-                color: 0x99ff99,
-            }],
-            components: components
-        });
 
         // Finally, clear the thinking state
         await interaction.editReply({ content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída' });

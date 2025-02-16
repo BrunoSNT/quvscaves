@@ -4,25 +4,10 @@ import {
     SlashCommandBuilder,
     REST,
     IntentsBitField as Intents,
-    BaseGuildTextChannel,
-    ChatInputCommandInteraction,
     MessageFlags,
-    ChannelType,
-    VoiceChannel
 } from 'discord.js';
-import { 
-    joinVoiceChannel,
-    createAudioPlayer,
-    createAudioResource,
-    AudioPlayerStatus
-} from '@discordjs/voice';
-import { Readable } from 'stream';
 import dotenv from 'dotenv';
 import { prisma } from './core/prisma';
-import { WorldStyle, ToneStyle, MagicLevel } from './shared/game/types';
-import { generateResponse } from './ai/gamemaster';
-import { sendFormattedResponse } from './shared/discord/embeds';
-import { Character } from './features/character/types';
 import { handleCreateCharacter } from './features/character/commands/create';
 import { handleCharacterSettings } from './features/character/commands/settings';
 import { handleListCharacters } from './features/character/commands/list';
@@ -37,16 +22,10 @@ import { handleListAdventures } from './features/adventure/commands/index';
 import { handleAdventureSettings } from './features/adventure/commands/settings';
 import { handleDeleteAdventure } from './features/adventure/commands/delete';
 import { handleCreateAdventure } from './features/adventure/commands/create';
-import { AdventureSettings } from './features/adventure/types';
 import { handleRegister } from './features/user/commands/register';
 import { handleHelp } from './features/user/commands/help';
 import { handleLinkWallet } from './features/wallet/commands/link';
 import { logger } from './shared/logger';
-import { SupportedLanguage } from './shared/i18n/types';
-import { GameContext } from './shared/game/types';
-import { VoiceConfig } from './features/voice/types';
-import { getVoiceService } from './features/voice/services';
-import chalk from 'chalk';
 import { handleButtonAction } from './features/adventure/commands/action';
 
 // Suppress punycode deprecation warning
