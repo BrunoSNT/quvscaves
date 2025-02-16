@@ -14,6 +14,13 @@ import chalk from 'chalk';
 
 const adventureService = new AdventureService();
 
+function splitIntoSentences(text: string): string[] {
+    // Split on periods, exclamation marks, or question marks followed by spaces or end of string
+    return text.split(/(?<=[.!?])\s+|\s*$/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+}
+
 // @ts-ignore - Discord.js types issue with VoiceChannel
 async function playNarration(channel: GuildVoiceChannelResolvable, texts: string[], config: VoiceConfig): Promise<{ startedPlaying: Promise<void>, finished: Promise<void> }> {
     try {
@@ -29,79 +36,116 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
         const player = createAudioPlayer();
         connection.subscribe(player);
 
-        // Start first TTS request immediately
-        const firstTextPromise = texts[0]?.trim() 
-            ? voiceService.speak(texts[0], config)
-            : Promise.resolve(null);
+        // Split texts into sentences
+        const narrationSentences = texts[0] ? splitIntoSentences(texts[0]) : [];
+        const atmosphereSentences = texts[1] ? splitIntoSentences(texts[1]) : [];
+        
+        // Combine all sentences, keeping track of which are narration vs atmosphere
+        const allSentences = [
+            ...narrationSentences.map(s => ({ text: s, type: 'narration' })),
+            ...atmosphereSentences.map(s => ({ text: s, type: 'atmosphere' }))
+        ];
 
-        // Start second TTS request after 2 seconds
-        const secondTextPromise = new Promise<Buffer | null>((resolve) => {
-            setTimeout(async () => {
-                if (texts[1]?.trim()) {
-                    try {
-                        const buffer = await voiceService.speak(texts[1], config);
-                        resolve(buffer);
-                    } catch (error) {
-                        logger.error('Error generating second audio:', error);
-                        resolve(null);
-                    }
-                } else {
-                    resolve(null);
-                }
-            }, 2000);
-        });
+        let startedPlayingResolveFn: (() => void) | null = null;
+        let finishedResolveFn: (() => void) | null = null;
+        let startedPlayingRejectFn: ((error: Error) => void) | null = null;
+        let finishedRejectFn: ((error: Error) => void) | null = null;
 
-        // Wait for both audio buffers
-        const [firstBuffer, secondBuffer] = await Promise.all([
-            firstTextPromise,
-            secondTextPromise
-        ]);
-
-        const audioBuffers = [firstBuffer, secondBuffer].filter(buffer => buffer !== null);
-
-        let currentIndex = 0;
-        const playNextSegment = async () => {
-            if (currentIndex >= audioBuffers.length) return;
-            
-            const audioBuffer = audioBuffers[currentIndex];
-            if (!audioBuffer) {
-                currentIndex++;
-                return playNextSegment();
-            }
-            
-            const stream = Readable.from(audioBuffer);
-            const resource = createAudioResource(stream);
-            
-            player.play(resource);
-            currentIndex++;
-        };
-
-        // Create promises for both start and completion
         const startedPlaying = new Promise<void>((resolve, reject) => {
-            player.once(AudioPlayerStatus.Playing, () => resolve());
-            player.once('error', (error) => reject(error));
+            startedPlayingResolveFn = resolve;
+            startedPlayingRejectFn = reject;
         });
 
         const finished = new Promise<void>((resolve, reject) => {
-            let segmentsPlayed = 0;
-            
-            player.on(AudioPlayerStatus.Idle, () => {
-                segmentsPlayed++;
-                if (segmentsPlayed < audioBuffers.length) {
-                    playNextSegment();
-                } else {
-                    resolve();
-                }
-            });
-            
-            player.on('error', (error) => {
-                logger.error('Error playing audio segment:', error);
-                reject(error);
-            });
+            finishedResolveFn = resolve;
+            finishedRejectFn = reject;
         });
 
-        // Start playing the first segment
-        await playNextSegment();
+        let currentIndex = 0;
+        let hasStartedPlaying = false;
+        let nextBuffer: Buffer | null = null;
+        let isProcessingNext = false;
+
+        const requestNextSentence = async () => {
+            if (currentIndex + 1 >= allSentences.length || isProcessingNext) return;
+            
+            isProcessingNext = true;
+            const nextSentence = allSentences[currentIndex + 1];
+            try {
+                nextBuffer = await voiceService.speak(nextSentence.text, config);
+            } catch (error) {
+                logger.error(`Error pre-processing next sentence: ${nextSentence.text}`, error);
+                nextBuffer = null;
+            }
+            isProcessingNext = false;
+        };
+
+        const playNextSentence = async () => {
+            if (currentIndex >= allSentences.length) {
+                finishedResolveFn?.();
+                return;
+            }
+
+            const { text } = allSentences[currentIndex];
+            try {
+                let buffer: Buffer | null;
+                
+                // Use pre-fetched buffer if available
+                if (currentIndex > 0 && nextBuffer) {
+                    buffer = nextBuffer;
+                    nextBuffer = null;
+                } else {
+                    buffer = await voiceService.speak(text, config);
+                }
+
+                if (!buffer) {
+                    currentIndex++;
+                    return playNextSentence();
+                }
+
+                const stream = Readable.from(buffer);
+                const resource = createAudioResource(stream);
+                player.play(resource);
+
+                if (!hasStartedPlaying) {
+                    hasStartedPlaying = true;
+                    startedPlayingResolveFn?.();
+                }
+
+                // Start requesting next sentence as soon as current starts playing
+                requestNextSentence();
+                
+                currentIndex++;
+            } catch (error) {
+                logger.error(`Error processing sentence: ${text}`, error);
+                currentIndex++;
+                return playNextSentence();
+            }
+        };
+
+        player.on(AudioPlayerStatus.Playing, () => {
+            // Start processing next sentence as soon as current starts playing
+            requestNextSentence();
+        });
+
+        player.on(AudioPlayerStatus.Idle, () => {
+            if (currentIndex < allSentences.length) {
+                playNextSentence();
+            } else {
+                finishedResolveFn?.();
+            }
+        });
+
+        player.on('error', (error) => {
+            logger.error('Error in audio player:', error);
+            if (!hasStartedPlaying) {
+                startedPlayingRejectFn?.(error);
+            }
+            finishedRejectFn?.(error);
+        });
+
+        // Start playing the first sentence
+        await playNextSentence();
 
         return { startedPlaying, finished };
     } catch (error) {
@@ -172,92 +216,49 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                             ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY
                         };
 
-                        const voiceService = await getVoiceService(voiceConfig.provider);
-                        const connection: VoiceConnection = joinVoiceChannel({
-                            channelId: voiceChannel.id,
-                            guildId: voiceChannel.guild.id,
-                            adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-                            selfDeaf: false,
-                            selfMute: false
-                        });
-
-                        const player = createAudioPlayer();
-                        connection.subscribe(player);
-
-                        // Start first TTS request immediately
-                        const firstBuffer = await voiceService.speak(narrationText, voiceConfig);
-                        
-                        if (firstBuffer) {
-                            const stream = Readable.from(firstBuffer);
-                            const resource = createAudioResource(stream);
-                            player.play(resource);
-
-                            // Create promises for both start and completion
-                            voicePromises.startedPlaying = new Promise<void>((resolve, reject) => {
-                                player.once(AudioPlayerStatus.Playing, () => resolve());
-                                player.once('error', (error) => reject(error));
-                            });
-
-                            // Display the response text without buttons
-                            const responseMessage = await channel.send({
-                                embeds: [{
-                                    title: '🎭 Action Result',
-                                    description: formattedResponse,
-                                    color: 0x99ff99,
-                                }]
-                            });
-
-                            // After first audio starts and embed is sent, start second TTS request
-                            await voicePromises.startedPlaying;
-
-                            // Now process the second text
-                            if (atmosphereText?.trim()) {
-                                const secondBuffer = await voiceService.speak(atmosphereText, voiceConfig);
-                                
-                                if (secondBuffer) {
-                                    voicePromises.finished = new Promise<void>((resolve, reject) => {
-                                        player.once(AudioPlayerStatus.Idle, () => {
-                                            const stream = Readable.from(secondBuffer);
-                                            const resource = createAudioResource(stream);
-                                            player.play(resource);
-                                            
-                                            player.once(AudioPlayerStatus.Idle, () => resolve());
-                                            player.once('error', (error) => reject(error));
-                                        });
-                                    });
-                                }
-                            }
-
-                            // Wait for all audio to finish before adding buttons
-                            try {
-                                await voicePromises.finished;
-                            } catch (error) {
-                                logger.error('Error waiting for voice playback to finish:', error);
-                            }
-
-                            // Add the action buttons
-                            const buttons = createActionButtons(suggestedActions);
-                            const components = buttons.length > 0 ? [{
-                                type: 1,
-                                components: buttons
-                            }] : [];
-
-                            // Edit the response message to add buttons
-                            await responseMessage.edit({
-                                embeds: [{
-                                    title: '🎭 Action Result',
-                                    description: formattedResponse,
-                                    color: 0x99ff99,
-                                }],
-                                components: components
-                            });
-                        }
+                        voicePromises = await playNarration(voiceChannel, [narrationText, atmosphereText], voiceConfig);
                     } catch (voiceError) {
                         logger.error('Error in voice playback:', voiceError);
                     }
                 }
             }
         }
+
+        // Wait for first sentence to start playing before showing the response
+        await voicePromises.startedPlaying;
+
+        // Display the response text without buttons
+        const responseMessage = await channel.send({
+            embeds: [{
+                title: '🎭 Action Result',
+                description: formattedResponse,
+                color: 0x99ff99,
+            }]
+        });
+
+        // Wait for all audio to finish before adding buttons
+        try {
+            await voicePromises.finished;
+        } catch (error) {
+            logger.error('Error waiting for voice playback to finish:', error);
+        }
+
+        // Add the action buttons
+        const buttons = createActionButtons(suggestedActions);
+        const components = buttons.length > 0 ? [{
+            type: 1,
+            components: buttons
+        }] : [];
+
+        // Edit the response message to add buttons
+        await responseMessage.edit({
+            embeds: [{
+                title: '🎭 Action Result',
+                description: formattedResponse,
+                color: 0x99ff99,
+            }],
+            components: components
+        });
 
         // Finally, clear the thinking state
         await interaction.editReply({ content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída' });
