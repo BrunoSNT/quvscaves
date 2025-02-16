@@ -1,5 +1,13 @@
-import { PrismaClient } from '../../prisma/client';
-import { logger } from '../shared/logger';
+import { PrismaClient, Prisma } from '../../prisma/client';
+import { logger, prettyPrintLog } from '../shared/logger';
+
+interface QueryEvent {
+    timestamp: Date;
+    query: string;
+    params: string;
+    duration: number;
+    target: string;
+}
 
 declare global {
     var prisma: PrismaClient | undefined;
@@ -20,11 +28,20 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Log queries in development
 if (process.env.NODE_ENV === 'development') {
-    prisma.$on('query', (e) => {
-        logger.debug('Query:', e);
+    (prisma as any).$on('query', (e: Prisma.QueryEvent) => {
+        logger.debug('RAG Query:' + prettyPrintLog(JSON.stringify({
+            timestamp: e.timestamp,
+            query: e.query,
+            params: e.params,
+            duration: e.duration,
+            target: e.target
+        })));
     });
 }
 
-prisma.$on('error', (e) => {
-    logger.error('Database error:', e);
+(prisma as any).$on('error', (e: Error) => {
+    logger.error('Database error:', {
+        message: e.message,
+        stack: e.stack
+    });
 }); 

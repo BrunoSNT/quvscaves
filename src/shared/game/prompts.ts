@@ -51,9 +51,7 @@ CORE PRINCIPLES:
 7. ONLY reference NPCs that are established in the context
 
 Each section MUST:
-- Start with proper bracket format [Section]
 - Contain relevant content
-- End with a blank line
 - Follow the sequence above
 - Do not include sections that do not apply or duplicate sections
 - Ensure each required section appears exactly once with no repetitive or extraneous content
@@ -68,15 +66,15 @@ Optional sections if applicable:
 - [Memory] - Key events or discoveries to remember
 
 Response Format Example:
-[Narration] - The path ahead remains unclear, but your determination drives you forward...
-
-[Atmosphere] - A moment of uncertainty hangs in the air as you consider your next move.
-
-[Available Actions] - 
-- Wait and observe your surroundings
-- Proceed with caution
-- Search for alternative paths
-
+{
+    "narration": "The path ahead remains unclear, but your determination drives you forward with a sense of purpose.",
+    "atmosphere": "A moment of uncertainty hangs in the air as you consider your next move.",
+    "available_actions": [
+        "Wait and observe your surroundings",
+        "Proceed with caution",
+        "Search for alternative paths"
+    ]
+}
 `,
     contextLabels: {
       scene: 'Current Scene',
@@ -123,8 +121,6 @@ PRINCÍPIOS FUNDAMENTAIS:
 7. APENAS referenciar NPCs estabelecidos no contexto
 
 Cada seção DEVE:
-- Começar com formato de colchetes [Seção]
-- Terminar com uma linha em branco
 - Seguir a sequência acima
 - Não incluir seções que não se aplicam nem duplicar seções
 - Assegure-se de que cada seção obrigatória apareça exatamente uma vez, sem conteúdo repetitivo ou adicional.
@@ -139,15 +135,15 @@ Seções opcionais quando aplicável:
 - [Memória] - Eventos chave ou descobertas para lembrar
 
 Exemplo de Resposta:
-[Narração] - O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...
-
-[Atmosfera] - Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.
-
-[Ações Disponíveis] - 
-- Aguardar e observar seus arredores
-- Prosseguir com cautela
-- Procurar por caminhos alternativos
-
+{
+    "narration": "O caminho à frente se estende adiante, iluminado apenas pela luz tênue que penetra nos esgots da caverna. A atmosfera é de mistério e incerteza, com o som distante de água rolando pelo túnel ao fundo.",
+    "atmosphere": "A atmosfera atual é de ambiguidade, com Jon sentindo a presença de algo inusitado no ambiente, embora nada específico esteja claro até agora.",
+    "available_actions": [
+        "Continuar em frente sem se preocupar com o que está por vir",
+        "Observar os arredores para tentar identificar qualquer sinal de perigo ou oportunidade",
+        "Iniciar a pesquisa, procurando por rastros ou pistas que possam orientá-lo"
+    ]
+}
 `,
     contextLabels: {
       scene: 'Cena Atual',

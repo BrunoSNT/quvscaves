@@ -85,7 +85,11 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         try {
             const context = await adventureService.buildGameContext(adventure, description);
             const response = await generateResponse(context);
-            logger.debug('Raw AI response:', response);
+            logger.debug('Raw AI response:\n' + prettyPrintLog(JSON.stringify({
+                responseLength: response.length,
+                response: response,
+                fullResponse: response
+            })));
             
             if (!response || typeof response !== 'string') {
                 throw new Error('Invalid AI response format');

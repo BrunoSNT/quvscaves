@@ -46,6 +46,7 @@ import { SupportedLanguage } from './shared/i18n/types';
 import { GameContext } from './shared/game/types';
 import { VoiceConfig } from './features/voice/types';
 import { getVoiceService } from './features/voice/services';
+import chalk from 'chalk';
 
 // Suppress punycode deprecation warning
 process.removeAllListeners('warning');
@@ -591,7 +592,8 @@ client.on(Events.InteractionCreate, async interaction => {
             if (interaction.customId.startsWith('action:')) {
                 await interaction.deferReply();
                 const action = interaction.customId.replace('action:', '');
-                
+                logger.debug(`Player action revieved.  \n\n${chalk.blue('ACTION: ') + action}\n`);
+
                 // Get the user's active adventure
                 const userAdventure = await prisma.adventure.findFirst({
                     where: { 

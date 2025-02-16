@@ -69,19 +69,20 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 }
 
 export async function generateResponse(context: GameContext): Promise<string> {
+
     const spinner = ora({
-        text: chalk.cyan('Generating AI response...'),
+        text: chalk.cyan('Generating AI response...\n\n'),
         spinner: 'dots12'
-    }).start();
+    });
 
     const maxRetries = 2;
     let retryCount = 0;
 
     async function attemptResponse(retryReason?: string): Promise<string> {
         const language = context.language;
-        const prompt = getGamePrompt(language);
-        const contextStr = buildContextString(context, language);
 
+        const contextStr = buildContextString(context, language);
+        const prompt = getGamePrompt(language);
         const reinforcementPrompt = retryReason ? `
 PREVIOUS RESPONSE WAS INVALID: ${retryReason}
 
@@ -114,34 +115,30 @@ REQUIREMENTS:
 5. NO player prompts or questions
 6. 3-5 actions only
 7. Actions MUST match character abilities
-8. Response MUST be parseable as JSON
+8. Response MUST be parseable as JSON` : '';
 
-YOUR TASK:
-1. Generate appropriate narrative content
-2. Format as JSON exactly as shown
-3. Return ONLY the JSON object
-
-EXAMPLE VALID RESPONSE:
-${JSON.stringify({
-    narration: "You carefully examine your surroundings, noting every detail that might reveal hidden dangers.",
-    atmosphere: "The air is thick with tension, and shadows seem to dance at the edge of your vision.",
-    available_actions: [
-        "Search methodically for traps",
-        "Move forward cautiously",
-        "Listen intently for any unusual sounds"
-    ]
-}, null, 2)}` : '';
-
-        logger.debug(chalk.cyan('Sending request to AI:'), {
+        logger.debug('Sending request to AI:\n' + prettyPrintLog(JSON.stringify({
             endpoint: AI_ENDPOINT,
             model: AI_MODEL,
             language,
             retryCount,
             retryReason,
-            contextLength: contextStr.length
-        });
+            contextLength: JSON.stringify(context).length,
+            hasReinforcement: !!retryReason,
+            prompt: {
+                system: prompt.system,
+                intro: prompt.intro,
+                contextSentToAI: contextStr,
+                contextFull: prettyPrintLog(JSON.stringify(context)),
+                reinforcementPreview: reinforcementPrompt ? prettyPrintLog(JSON.stringify(reinforcementPrompt)) : 'none',
+            }
+        })));
+        
 
-        const response = await axios.post(AI_ENDPOINT, {
+        logger.debug('Formatted context sent to AI:\n' + formatContext(context) + '\n');
+
+        // Initiate the axios post request
+        const axiosPromise = axios.post(AI_ENDPOINT, {
             model: AI_MODEL,
             prompt: `<|im_start|>system
 ${prompt.system}
@@ -176,7 +173,6 @@ ${language === 'en-US' ? `{
 <|im_start|>user
 ${context.playerActions[0]}
 <|im_end|>
-<|im_start|>assistant
 `,
             temperature: 0.3,
             max_tokens: 800,
@@ -186,12 +182,24 @@ ${context.playerActions[0]}
             stream: false
         });
 
+        // Start the spinner after the axios post call has been initiated
+        spinner.start();
+
+        const response = await axiosPromise;
+
         let fullResponse = '';
         if (typeof response.data === 'object' && response.data.response) {
             fullResponse = response.data.response;
         } else if (typeof response.data === 'string') {
             fullResponse = response.data;
         }
+
+        logger.debug('Raw AI response:\n' + prettyPrintLog(JSON.stringify({
+            responseLength: fullResponse.length,
+            response: fullResponse,
+            isObject: typeof response.data === 'object',
+            hasResponseField: typeof response.data === 'object' && 'response' in response.data
+        })));
 
         // Clean up the response
         fullResponse = fullResponse
@@ -205,23 +213,35 @@ ${context.playerActions[0]}
             try {
                 // Validate the extracted JSON is parseable
                 const parsed = JSON.parse(jsonMatch[0]);
+
                 // Additional validation to ensure all required fields are present
                 if (language === 'en-US') {
                     if (!parsed.narration || !parsed.atmosphere || !Array.isArray(parsed.available_actions)) {
-                        throw new Error('Missing required fields in JSON response');
+                        const error = 'Missing required fields in JSON response';
+                        logger.error(error, parsed);
+                        throw new Error(error);
                     }
                 } else {
                     if (!parsed.narracao || !parsed.atmosfera || !Array.isArray(parsed.acoes_disponiveis)) {
-                        throw new Error('Campos obrigatórios ausentes na resposta JSON');
+                        const error = 'Campos obrigatórios ausentes na resposta JSON';
+                        logger.error(error, parsed);
+                        throw new Error(error);
                     }
                 }
                 fullResponse = jsonMatch[0];
             } catch (parseError: any) {
-                logger.error('Failed to parse or validate JSON response:', parseError, '\nResponse:', fullResponse);
+                logger.error('Failed to parse or validate JSON response:\n' + prettyPrintLog(JSON.stringify({
+                    error: parseError.message,
+                    response: fullResponse,
+                    jsonMatch: jsonMatch[0]
+                })));
                 throw new Error(`Invalid JSON response from AI: ${parseError.message}`);
             }
         } else {
-            logger.error('No JSON found in response:', fullResponse);
+            logger.error('No JSON found in response:\n' + prettyPrintLog(JSON.stringify({
+                responseLength: fullResponse.length,
+                responsePreview: fullResponse.substring(0, 100)
+            })));
             throw new Error('No JSON found in AI response');
         }
 
@@ -240,62 +260,33 @@ ${context.playerActions[0]}
         }
 
         if (!validationError.isValid) {
-            logger.error(`${chalk.red('✖')} Failed to get valid response after ${maxRetries} retries`);
-            logger.debug(`${chalk.gray('↳')} Last response: ${prettyPrintLog(response)}`);
+            logger.error(`${chalk.red('✖')} Failed to get valid response after ${maxRetries} retries\n` + prettyPrintLog(JSON.stringify({
+                lastResponse: response,
+                lastError: validationError.reason
+            })));
             
             // Return fallback JSON response
-            const fallbackResponse = context.language === 'en-US' ? {
-                narration: "The path ahead remains unclear, but your determination drives you forward...",
-                atmosphere: "A moment of uncertainty hangs in the air as you consider your next move.",
-                available_actions: [
-                    "Wait and observe your surroundings",
-                    "Proceed with caution",
-                    "Search for alternative paths"
-                ]
-            } : {
-                narracao: "O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...",
-                atmosfera: "Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.",
-                acoes_disponiveis: [
-                    "Aguardar e observar seus arredores",
-                    "Prosseguir com cautela",
-                    "Procurar por caminhos alternativos"
-                ]
-            };
-            return JSON.stringify(fallbackResponse, null, 2);
+            const fallbackResponse = createFallbackResponse(context);
+            logger.info('Using fallback response:', fallbackResponse);
+            return fallbackResponse;
         }
-
-        logger.debug(`${chalk.green('✓')} Generated response: ${prettyPrintLog(response)}`);
+        logger.debug(`${chalk.green('✓')} Generated response:\n\n ${prettyPrintLog(response)}\n\n`);
         return response;
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            logger.error(`${chalk.red('✖')} API Error:`, {
+            logger.error(`${chalk.red('✖')} API Error:\n` + prettyPrintLog(JSON.stringify({
                 status: error.response?.status,
                 message: error.message,
                 data: JSON.stringify(error.response?.data)
-            });
+            })));
         } else {
             logger.error(`${chalk.red('✖')} Error:`, error);
         }
         
         // Return fallback JSON response
-        const fallbackResponse = context.language === 'en-US' ? {
-            narration: "The path ahead remains unclear, but your determination drives you forward...",
-            atmosphere: "A moment of uncertainty hangs in the air as you consider your next move.",
-            available_actions: [
-                "Wait and observe your surroundings",
-                "Proceed with caution",
-                "Search for alternative paths"
-            ]
-        } : {
-            narracao: "O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...",
-            atmosfera: "Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.",
-            acoes_disponiveis: [
-                "Aguardar e observar seus arredores",
-                "Prosseguir com cautela",
-                "Procurar por caminhos alternativos"
-            ]
-        };
-        return JSON.stringify(fallbackResponse, null, 2);
+        const fallbackResponse = createFallbackResponse(context);
+        logger.info('Using fallback response:', fallbackResponse);
+        return fallbackResponse;
     } finally {
         spinner.stop();
     }
@@ -379,27 +370,4 @@ interface GameOutput {
     narracao?: string;
     atmosfera?: string;
     acoes_disponiveis?: string[];
-}
-
-function formatDiscordResponse(response: string, language: SupportedLanguage): string {
-    try {
-        const gameOutput = JSON.parse(response) as GameOutput;
-        const isEnglish = language === 'en-US';
-
-        // Format sections
-        const narration = isEnglish ? gameOutput.narration : gameOutput.narracao;
-        const atmosphere = isEnglish ? gameOutput.atmosphere : gameOutput.atmosfera;
-        const actions = isEnglish ? gameOutput.available_actions : gameOutput.acoes_disponiveis;
-
-        // Build formatted output using Discord markdown
-        const sections = [
-            narration ? `📖 **${isEnglish ? 'Narration' : 'Narração'}**\n${narration}\n` : '',
-            atmosphere ? `🌍 **${isEnglish ? 'Atmosphere' : 'Atmosfera'}**\n${atmosphere}\n` : '',
-            actions?.length ? `⚔️ **${isEnglish ? 'Available Actions' : 'Ações Disponíveis'}**\n${actions.map(a => `• ${a}`).join('\n')}` : ''
-        ].filter(Boolean);
-
-        return sections.join('\n');
-    } catch {
-        return response;
-    }
 }
