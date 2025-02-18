@@ -109,6 +109,7 @@ model Adventure {
   textChannelId String?
   settings      Json              @default("{}")
   players       AdventurePlayer[]
+  memories      Memory[]
   userId        String
   user          User              @relation(fields: [userId], references: [id])
 
@@ -159,4 +160,18 @@ model Wallet {
   user      User     @relation(fields: [userId], references: [id])
 
   @@map("wallets")
+}
+
+model Memory {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  adventureId String
+  type        String   // 'SCENE' | 'QUEST' | 'CHARACTER' | 'LOCATION' | 'ITEM'
+  title       String
+  description String   @db.Text
+  metadata    Json?    @default("{}")
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+
+  @@map("memories")
 }

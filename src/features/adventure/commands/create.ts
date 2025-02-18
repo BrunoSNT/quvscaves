@@ -904,6 +904,22 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
         });
         logger.debug('Created adventure:', { adventureId: adventure.id });
 
+        // Create initial scene memory
+        const messages = getMessages(language);
+        const initialScene = messages.defaultScenes.beginning;
+        await prisma.memory.create({
+            data: {
+                adventureId: adventure.id,
+                type: 'SCENE',
+                title: initialScene.name,
+                description: initialScene.description,
+                metadata: {
+                    location: initialScene.location,
+                    summary: initialScene.summary
+                }
+            }
+        });
+
         // Additional steps: create initial scene, add adventure players, etc.
         // For example, create adventure players for each character:
         await Promise.all(characters.map(async character => {

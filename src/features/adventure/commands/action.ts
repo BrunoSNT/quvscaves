@@ -158,13 +158,19 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
     try {
         // First, display the user's action in a new message
         const channel = interaction.channel;
-        const actionMessage = await channel.send({
-            embeds: [{
-                title: `🎭 ${context.characters[0].name.charAt(0).toUpperCase() + context.characters[0].name.slice(1)} action`,
-                description: action,
-                color: 0x3498db,
-            }]
-        });
+        let actionMessage;
+        try {
+            actionMessage = await channel.send({
+                embeds: [{
+                    title: `🎭 ${context.characters[0].name.charAt(0).toUpperCase() + context.characters[0].name.slice(1)} action`,
+                    description: action,
+                    color: 0x3498db,
+                }]
+            });
+        } catch (error) {
+            logger.error('Error sending action message:', error);
+            // Continue execution even if action message fails
+        }
 
         const response = await generateResponse(context);
         if (!response || typeof response !== 'string') {
@@ -187,9 +193,51 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
             ? parsedResponse.atmosphere
             : parsedResponse.atmosfera;
 
+        // Create a new scene memory
+        if (context.adventure?.id) {
+            try {
+                // Analyze action and response for metadata
+                const metadata = {
+                    action,
+                    atmosphere: atmosphereText || '',
+                    timestamp: new Date().toISOString(),
+                    // Add flags for different types of content
+                    combat: action.toLowerCase().includes('atac') || 
+                           action.toLowerCase().includes('luta') ||
+                           action.toLowerCase().includes('combat'),
+                    discovery: action.toLowerCase().includes('explor') || 
+                             action.toLowerCase().includes('procur') ||
+                             action.toLowerCase().includes('investig'),
+                    interaction: action.toLowerCase().includes('fala') || 
+                               action.toLowerCase().includes('conversa') ||
+                               action.toLowerCase().includes('pergunt'),
+                    quest_related: context.memory.activeQuests.some(quest => 
+                        action.toLowerCase().includes(quest.title.toLowerCase())
+                    ),
+                    key_item: context.memory.importantItems.some(item =>
+                        action.toLowerCase().includes(item.title.toLowerCase())
+                    )
+                };
+
+                await prisma.memory.create({
+                    data: {
+                        adventureId: context.adventure.id,
+                        type: 'SCENE',
+                        title: `Scene: ${action.substring(0, 50)}...`,
+                        description: narrationText,
+                        metadata
+                    }
+                });
+                logger.info(`Created scene memory for action: ${action}`);
+            } catch (memoryError) {
+                logger.error('Error creating scene memory:', memoryError);
+                // Continue execution even if memory creation fails
+            }
+        }
+
         const formattedResponse = context.language === 'en-US' 
-            ? `📖 **Narration**\n${parsedResponse.narration}\n\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}\n\n⚔️ **Available Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}`
-            : `📖 **Narração**\n${parsedResponse.narracao}\n\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}\n\n⚔️ **Ações Disponíveis**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}`;
+            ? `📖 **Narration**\n${parsedResponse.narration}\n${parsedResponse.atmosphere ? `\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}` : ''}\n\n⚔️ **Available Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}`
+            : `📖 **Narração**\n${parsedResponse.narracao}\n${parsedResponse.atmosfera ? `\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}` : ''}\n\n⚔️ **Ações Disponíveis**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}`;
 
         const suggestedActions = context.language === 'en-US'
             ? parsedResponse.available_actions
@@ -219,22 +267,33 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                         voicePromises = await playNarration(voiceChannel, [narrationText, atmosphereText], voiceConfig);
                     } catch (voiceError) {
                         logger.error('Error in voice playback:', voiceError);
+                        // Continue execution even if voice playback fails
                     }
                 }
             }
         }
 
         // Wait for first sentence to start playing before showing the response
-        await voicePromises.startedPlaying;
+        try {
+            await voicePromises.startedPlaying;
+        } catch (error) {
+            logger.error('Error waiting for voice to start:', error);
+        }
 
         // Display the response text without buttons
-        const responseMessage = await channel.send({
-            embeds: [{
-                title: '🎭 Action Result',
-                description: formattedResponse,
-                color: 0x99ff99,
-            }]
-        });
+        let responseMessage;
+        try {
+            responseMessage = await channel.send({
+                embeds: [{
+                    title: '🎭 Action Result',
+                    description: formattedResponse,
+                    color: 0x99ff99,
+                }]
+            });
+        } catch (error) {
+            logger.error('Error sending response message:', error);
+            throw error; // This is critical, so we should stop if it fails
+        }
 
         // Wait for all audio to finish before adding buttons
         try {
@@ -251,21 +310,64 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
         }] : [];
 
         // Edit the response message to add buttons
-        await responseMessage.edit({
-            embeds: [{
-                title: '🎭 Action Result',
-                description: formattedResponse,
-                color: 0x99ff99,
-            }],
-            components: components
-        });
+        try {
+            if (responseMessage) {
+                await responseMessage.edit({
+                    embeds: [{
+                        title: '🎭 Action Result',
+                        description: formattedResponse,
+                        color: 0x99ff99,
+                    }],
+                    components: components
+                });
+            }
+        } catch (error) {
+            logger.error('Error editing response message with buttons:', error);
+            // Continue execution even if button addition fails
+        }
 
         // Finally, clear the thinking state
-        await interaction.editReply({ content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída' });
+        try {
+            if (interaction.deferred) {
+                await interaction.editReply({ 
+                    content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída'
+                });
+            }
+        } catch (error) {
+            logger.error('Error editing interaction reply:', error);
+            // Try to send a new reply if editing fails
+            try {
+                await interaction.followUp({
+                    content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída',
+                    ephemeral: true
+                });
+            } catch (followUpError) {
+                logger.error('Error sending follow-up message:', followUpError);
+            }
+        }
 
         logger.info(`Action processed for adventure ${context.adventure?.id}`);
     } catch (error) {
         logger.error('Error handling action response:', error);
+        try {
+            if (interaction.deferred) {
+                await interaction.editReply({ 
+                    content: context.language === 'en-US' 
+                        ? 'There was an error processing your action. Please try again.'
+                        : 'Houve um erro ao processar sua ação. Por favor, tente novamente.',
+                    ephemeral: true
+                });
+            } else {
+                await interaction.followUp({
+                    content: context.language === 'en-US' 
+                        ? 'There was an error processing your action. Please try again.'
+                        : 'Houve um erro ao processar sua ação. Por favor, tente novamente.',
+                    ephemeral: true
+                });
+            }
+        } catch (replyError) {
+            logger.error('Error sending error message:', replyError);
+        }
         throw error;
     }
 }
@@ -403,12 +505,27 @@ function extractActionItems(actionsText: string): string[] {
 function createActionButtons(actions: string[]) {
     if (!actions || actions.length === 0) return [];
 
-    return actions.slice(0, 5).map(action => ({
-        type: 2,
-        style: 1,
-        label: action.substring(0, 80),
-        custom_id: `action:${action.substring(0, 80)}`
-    }));
+    return actions.slice(0, 5).map(action => {
+        // Smart truncation that preserves meaning
+        let label = action;
+        if (label.length > 80) {
+            // Try to find a good breakpoint between 70-80 chars
+            const breakPoint = label.substring(0, 77).lastIndexOf(' ');
+            if (breakPoint > 0) {
+                label = label.substring(0, breakPoint) + '...';
+            } else {
+                // If no good breakpoint, do a hard truncate
+                label = label.substring(0, 77) + '...';
+            }
+        }
+
+        return {
+            type: 2,
+            style: 1,
+            label,
+            custom_id: `action:${action}` // Keep full action in custom_id
+        };
+    });
 }
 
 export function toGameCharacter(character: any) {

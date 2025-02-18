@@ -27,11 +27,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add file handler for persistent logging
-file_handler = logging.FileHandler('tts_server.log')
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [%(name)s] - %(message)s'))
-logger.addHandler(file_handler)
-
 # Suppress warnings
 warnings.filterwarnings('ignore')
 

@@ -6,6 +6,7 @@ import { Prisma } from '@prisma/client';
 import { GameStats } from '../../../shared/game/types';
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { GameContext } from '../../../shared/game/types';
+import { rankMemories, deduplicateMemories } from '../utils/memory';
 
 interface PlayerInfo {
     userId: string;
@@ -128,6 +129,14 @@ export class AdventureService {
 
         const validCharacters = characters.filter((c) => c !== null).map(this.mapToCharacter);
 
+        // Load and transform memories
+        const memories = await prisma.memory.findMany({
+            where: { adventureId: adventure.id },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        const transformedMemories = await this.transformMemories(memories, action);
+
         const context: GameContext = {
             adventure,
             scene: adventure.description || '',
@@ -141,13 +150,7 @@ export class AdventureService {
             },
             adventureSettings: adventure.settings as AdventureSettings,
             language: adventure.settings.language || 'en-US',
-            memory: {
-                recentScenes: [],
-                activeQuests: [],
-                knownCharacters: [],
-                discoveredLocations: [],
-                importantItems: []
-            }
+            memory: transformedMemories
         };
 
         return context;
@@ -230,6 +233,14 @@ export class AdventureService {
 
         const validCharacters = characters.filter((c) => c !== null).map(this.mapToCharacter);
 
+        // Load and transform memories
+        const memories = await prisma.memory.findMany({
+            where: { adventureId: adventure.id },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        const transformedMemories = await this.transformMemories(memories, description);
+
         return {
             adventure,
             scene: adventure.description || '',
@@ -250,13 +261,7 @@ export class AdventureService {
                 ...adventure.settings
             },
             language: adventure.language as SupportedLanguage,
-            memory: {
-                recentScenes: [],
-                activeQuests: [],
-                knownCharacters: [],
-                discoveredLocations: [],
-                importantItems: []
-            }
+            memory: transformedMemories
         };
     }
 
@@ -353,6 +358,31 @@ export class AdventureService {
                 characterId: a.characterId
             })) || [],
             background: character.background || undefined
+        };
+    }
+
+    private async transformMemories(memories: Memory[], currentAction: string) {
+        // First rank and deduplicate memories
+        const rankedMemories = rankMemories(memories, currentAction);
+        const uniqueMemories = deduplicateMemories(rankedMemories);
+
+        // Transform memories into the expected format by type
+        return {
+            recentScenes: uniqueMemories
+                .filter(m => m.type === 'SCENE')
+                .map(m => ({ summary: m.description })),
+            activeQuests: uniqueMemories
+                .filter(m => m.type === 'QUEST')
+                .map(m => ({ title: m.title, description: m.description })),
+            knownCharacters: uniqueMemories
+                .filter(m => m.type === 'CHARACTER')
+                .map(m => ({ title: m.title, description: m.description })),
+            discoveredLocations: uniqueMemories
+                .filter(m => m.type === 'LOCATION')
+                .map(m => ({ title: m.title, description: m.description })),
+            importantItems: uniqueMemories
+                .filter(m => m.type === 'ITEM')
+                .map(m => ({ title: m.title, description: m.description }))
         };
     }
 } 
