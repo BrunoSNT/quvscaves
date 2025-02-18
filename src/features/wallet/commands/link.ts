@@ -1,4 +1,4 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { DefaultWalletService } from '../services/wallet';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger } from '../../../shared/logger';

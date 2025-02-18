@@ -1,9 +1,9 @@
 import { prisma } from '../../../core/prisma';
-import { Adventure, AdventureSettings, WorldStyle, ToneStyle, MagicLevel } from '../types';
+import { Adventure, AdventureSettings } from '../types';
 import { logger } from '../../../shared/logger';
 import { Character } from '../../character/types';
-import { Prisma } from '@prisma/client';
-import { GameStats } from '../../../shared/game/types';
+import { Memory, Prisma } from '../../../../prisma/client';
+import { GameStats, MagicLevel, ToneStyle, WorldStyle } from '../../../shared/game/types';
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { GameContext } from '../../../shared/game/types';
 import { rankMemories, deduplicateMemories } from '../utils/memory';
@@ -253,11 +253,6 @@ export class AdventureService {
                 questProgress: ''
             },
             adventureSettings: {
-                worldStyle: adventure.worldStyle as WorldStyle,
-                toneStyle: adventure.toneStyle as ToneStyle,
-                magicLevel: adventure.magicLevel as MagicLevel,
-                language: adventure.language as SupportedLanguage,
-                useVoice: adventure.voiceType !== 'NONE',
                 ...adventure.settings
             },
             language: adventure.language as SupportedLanguage,

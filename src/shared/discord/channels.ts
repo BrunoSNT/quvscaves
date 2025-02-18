@@ -1,11 +1,11 @@
-import { Guild, CategoryChannel, TextChannel, VoiceChannel, ChannelType, ChatInputCommandInteraction, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, MessageActionRowComponentBuilder } from 'discord.js';
+import { Guild, CategoryChannel, TextChannel, VoiceChannel, ChannelType, ChatInputCommandInteraction, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, MessageActionRowComponentBuilder, MessageFlags } from 'discord.js';
 import { logger } from '../../shared/logger';
 import { prisma } from '../../core/prisma';
 import type { Character } from '../../features/character/types';
 import { formatCharacterSheet } from './sheet';
 import { handlePlayerAction } from '../../features/adventure/commands/action';
 import { getMessages } from '../../shared/i18n/translations';
-import { SupportedLanguage } from 'shared/i18n/types';
+import { SupportedLanguage } from '../i18n/types';
 
 export async function createCategoryChannel(guild: Guild, name: string): Promise<CategoryChannel> {
     return guild.channels.create({

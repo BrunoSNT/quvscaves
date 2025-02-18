@@ -17,7 +17,7 @@ import { createCategoryChannel, createTextChannel, createPlayerChannels } from '
 import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../../features/voice/config/voice';
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { getMessages } from '../../../shared/i18n/translations';
-import { Character } from '@prisma/client';
+import { Character } from '../../../../prisma/client';
 
 export async function handleCreateAdventure(interaction: ChatInputCommandInteraction) {
     // Look up the database user based on their Discord ID
