@@ -204,6 +204,10 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                 // Analyze action and response for metadata
                 const metadata = {
                     action,
+                    selectedAction: action,
+                    availableActions: context.language === 'en-US' 
+                        ? parsedResponse.available_actions 
+                        : parsedResponse.acoes_disponiveis,
                     atmosphere: atmosphereText || '',
                     timestamp: new Date().toISOString(),
                     // Add flags for different types of content
@@ -232,13 +236,6 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                     'SCENE',
                     metadata
                 );
-
-                // Get visualization URL and add to response
-                const visualizationUrl = await memoryService.getVisualizationUrl(context.adventure.id);
-                const visualizationLink = context.language === 'en-US'
-                    ? `\n\n🔍 [View Adventure Map](file://${visualizationUrl})`
-                    : `\n\n🔍 [Ver Mapa da Aventura](file://${visualizationUrl})`;
-                formattedResponse += visualizationLink;
 
                 logger.info(`Created scene memory and visualization for action: ${action}`);
             } catch (memoryError) {

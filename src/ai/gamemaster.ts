@@ -200,19 +200,53 @@ ${needsQuestHook ? '⚠️ QUEST HOOK REQUIRED - Must introduce a new mission or
    Must ${hasCharacters ? 'deepen existing relationships' : 'establish new relationships'}
    Show character reactions and emotions
 
-4. NARRATIVE TENSION:
-   - Build mystery or conflict
-   - Create anticipation
-   - Add environmental or situational changes
-   
+4. NARRATIVE STRUCTURE:
+   - Beginning: Set the scene and initial reaction to player's action
+   - Development: Show consequences and interactions
+   - Conclusion: Clear resolution of the immediate situation
+   - NO CLIFFHANGERS OR QUESTIONS at the end
+   - End with a clear state of the situation
+
 5. ACTION CONSEQUENCES:
    - Show immediate effects of player choices
    - Change NPC attitudes or behavior
    - Modify environment or situation
    - Progress toward goals
 
+6. NARRATIVE TENSION:
+   - Build mystery or conflict
+   - Create anticipation
+   - Add environmental or situational changes
+
 PREVIOUS SCENES:
 ${context.memory.recentScenes.slice(0, 3).map(s => `- ${s.summary}`).join('\n')}
+
+RESPONSE FORMAT REQUIREMENTS:
+For ${context.language === 'en-US' ? 'English' : 'Portuguese'}:
+
+${context.language === 'en-US' ? `{
+    "narration": "Must follow three-part structure:
+        1. BEGINNING - Set the scene and initial reaction
+        2. DEVELOPMENT - Show consequences and interactions
+        3. CONCLUSION - Clear resolution without questions or cliffhangers",
+    "atmosphere": "Current mood, weather, and environmental details",
+    "available_actions": [
+        "Action 1 that follows from the concluded scene",
+        "Action 2 that builds on the current situation",
+        "Action 3 that explores new possibilities"
+    ]
+}` : `{
+    "narracao": "Deve seguir estrutura em três partes:
+        1. INÍCIO - Estabelecer a cena e reação inicial
+        2. DESENVOLVIMENTO - Mostrar consequências e interações
+        3. CONCLUSÃO - Resolução clara sem perguntas ou suspense",
+    "atmosfera": "Humor atual, clima e detalhes do ambiente",
+    "acoes_disponiveis": [
+        "Ação 1 que segue a cena concluída",
+        "Ação 2 que desenvolve a situação atual",
+        "Ação 3 que explora novas possibilidades"
+    ]
+}`}
 
 FAILURE TO MEET THESE REQUIREMENTS WILL RESULT IN RESPONSE REJECTION.`;
 }
@@ -457,6 +491,12 @@ ${context.playerActions[0]}
                     throw new Error('Response must introduce new story elements');
                 }
 
+                // Clear reinforcement fields after successful validation
+                if (retryReason) {
+                    logger.debug('Clearing reinforcement fields after successful response');
+                    retryReason = undefined;
+                }
+
                 fullResponse = JSON.stringify(parsed);
             } catch (parseError: any) {
                 logger.error('Failed to parse or validate JSON response:\n' + prettyPrintLog(JSON.stringify({
@@ -597,14 +637,38 @@ function extractKnownElements(context: GameContext): string {
     return [...characters, ...locations, ...items].join(', ');
 }
 
-async function validateNewElements(
-    response: any,
-    context: GameContext,
-    language: SupportedLanguage
-): Promise<boolean> {
+async function validateNewElements(response: any, context: GameContext, language: SupportedLanguage): Promise<boolean> {
     const narration = language === 'en-US' ? response.narration : response.narracao;
-    const lastScene = context.memory.recentScenes[0]?.summary || '';
     
+    // Check for problematic cliffhangers at the end
+    const lastParagraph = narration.split('\n').pop() || '';
+    const hasDirectQuestion = lastParagraph.trim().endsWith('?');
+    const hasQuestionWord = /\b(what|how|why|where|when|who|qual|como|por que|onde|quando|quem)\b/i.test(lastParagraph);
+    const hasUnresolvedAction = /\b(suddenly|unexpectedly|without warning|de repente|inesperadamente|sem aviso)\b/i.test(lastParagraph);
+    
+    // Allow tension-building endings that don't leave immediate actions unresolved
+    const allowedTensionPatterns = [
+        /aguardando/i,
+        /waiting/i,
+        /mysterious/i,
+        /misterioso/i,
+        /tension/i,
+        /tensão/i,
+        /atmosphere/i,
+        /atmosfera/i,
+        /anticipation/i,
+        /antecipação/i
+    ];
+
+    const hasTensionBuilding = allowedTensionPatterns.some(pattern => pattern.test(lastParagraph));
+    
+    if ((hasDirectQuestion || (hasQuestionWord && !hasTensionBuilding) || hasUnresolvedAction) && 
+        !lastParagraph.includes('"') && // Ignore questions in dialogue
+        !lastParagraph.includes('"')) { // Ignore questions in Portuguese dialogue
+        logger.warn('Narration ends with a problematic cliffhanger or unresolved action');
+        return false;
+    }
+
     // Check for direct text similarity with recent scenes
     const recentScenes = context.memory.recentScenes.slice(0, 3).map(s => s.summary);
     let maxSimilarity = 0;
@@ -640,7 +704,7 @@ async function validateNewElements(
     const newElements: StoryElement[] = [];
     
     // Check for location changes
-    const currentLocation = extractLocation(lastScene);
+    const currentLocation = extractLocation(context.memory.recentScenes[0]?.summary || '');
     const newLocation = extractLocation(narration);
     if (newLocation && newLocation !== currentLocation) {
         newElements.push({
