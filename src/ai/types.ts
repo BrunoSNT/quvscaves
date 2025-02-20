@@ -26,7 +26,7 @@ export interface AIContext {
         questProgress: string;
     };
     language: string;
-    adventureSettings: {
+    adventure?: {
         worldStyle: WorldStyle;
         toneStyle: ToneStyle;
         magicLevel: MagicLevel;

@@ -3,7 +3,7 @@ import { logger } from '../../../shared/logger';
 import axios from 'axios';
 
 export class KokoroService implements VoiceService {
-    private readonly API_URL = 'https://api.kokoro.ai/v1/tts';
+    private readonly API_URL = 'http://localhost:8001/tts';
 
     async speak(text: string, config: VoiceConfig): Promise<Buffer> {
         try {

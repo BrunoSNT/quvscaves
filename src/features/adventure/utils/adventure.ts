@@ -16,7 +16,7 @@ export function formatAdventureContext(adventure: Adventure): GameContext {
             inventory: [],
             questProgress: ''
         },
-        adventureSettings: adventure.settings,
+        adventure?: adventure.settings,
         language: adventure.settings.language || 'en-US',
         memory: {
             recentScenes: [],
@@ -44,7 +44,7 @@ export function validateAdventureSettings(settings: Partial<AdventureSettings>):
 }
 
 export function generateAdventureDescription(context: GameContext): string {
-    const { adventureSettings, characters } = context;
-    return `A ${adventureSettings.worldStyle.toLowerCase()} adventure with a ${adventureSettings.toneStyle.toLowerCase()} tone. 
+    const { adventure?, characters } = context;
+    return `A ${adventure?.worldStyle.toLowerCase()} adventure with a ${adventure?.toneStyle.toLowerCase()} tone. 
 Players: ${characters.map(c => `${c.name} (${c.class})`).join(', ')}`;
 } 

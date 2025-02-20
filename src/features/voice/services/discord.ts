@@ -3,7 +3,7 @@ import { logger } from '../../../shared/logger';
 import axios from 'axios';
 
 export class DiscordService implements VoiceService {
-    private readonly TTS_SERVER_URL = 'http://localhost:8000';
+    private readonly TTS_SERVER_URL = 'http://localhost:8001';
 
     async speak(text: string, config: VoiceConfig): Promise<Buffer> {
         try {

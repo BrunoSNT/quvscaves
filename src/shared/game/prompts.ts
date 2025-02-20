@@ -193,10 +193,10 @@ export function buildContextString(context: GameContext, language: SupportedLang
 
   // Add adventure style context
   const styleContext = `
-${labels.style}: ${context.adventureSettings.worldStyle}
-${labels.tone}: ${context.adventureSettings.toneStyle}
-${labels.magic}: ${context.adventureSettings.magicLevel}
-${context.adventureSettings ? `Setting: ${context.adventureSettings.language || context.adventureSettings.worldStyle || context.adventureSettings.toneStyle || context.adventureSettings.magicLevel}` : ''}`;
+${labels.style}: ${context.adventure?.worldStyle}
+${labels.tone}: ${context.adventure?.toneStyle}
+${labels.magic}: ${context.adventure?.magicLevel}
+`;
 
   // Add memory context
   const memoryContext = context.memory ? `

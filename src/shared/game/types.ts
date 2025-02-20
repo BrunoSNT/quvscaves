@@ -83,7 +83,6 @@ export interface GameContext {
     characters: Character[];
     playerActions: string[];
     currentState: GameState;
-    adventureSettings: AdventureSettings;
     language: SupportedLanguage;
     memory: Memory;
     combat?: Combat;

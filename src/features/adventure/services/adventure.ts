@@ -148,7 +148,6 @@ export class AdventureService {
                 inventory: [],
                 questProgress: ''
             },
-            adventureSettings: adventure.settings as AdventureSettings,
             language: adventure.settings.language || 'en-US',
             memory: transformedMemories
         };
@@ -251,9 +250,6 @@ export class AdventureService {
                 mana: 100,
                 inventory: [],
                 questProgress: ''
-            },
-            adventureSettings: {
-                ...adventure.settings
             },
             language: adventure.language as SupportedLanguage,
             memory: transformedMemories

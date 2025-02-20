@@ -11,6 +11,7 @@ import { Readable } from 'stream';
 import { GameContext } from '../../../shared/game/types';
 import { Adventure } from '../types';
 import chalk from 'chalk';
+import { MemoryService } from '../services/memory';
 
 const adventureService = new AdventureService();
 
@@ -193,6 +194,10 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
             ? parsedResponse.atmosphere
             : parsedResponse.atmosfera;
 
+        let formattedResponse = context.language === 'en-US' 
+            ? `📖 **Narration**\n${parsedResponse.narration}\n${parsedResponse.atmosphere ? `\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}` : ''}\n\n⚡ **Fast Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}\n`
+            : `📖 **Narração**\n${parsedResponse.narracao}\n${parsedResponse.atmosfera ? `\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}` : ''}\n\n⚡ **Ações Rápidas**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}\n`;
+
         // Create a new scene memory
         if (context.adventure?.id) {
             try {
@@ -219,25 +224,32 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                     )
                 };
 
-                await prisma.memory.create({
-                    data: {
-                        adventureId: context.adventure.id,
-                        type: 'SCENE',
-                        title: `Scene: ${action.substring(0, 50)}...`,
-                        description: narrationText,
-                        metadata
-                    }
-                });
-                logger.info(`Created scene memory for action: ${action}`);
+                const memoryService = new MemoryService();
+                await memoryService.createMemory(
+                    context.adventure.id,
+                    `Scene: ${action.substring(0, 50)}...`,
+                    narrationText,
+                    'SCENE',
+                    metadata
+                );
+
+                // Get visualization URL and add to response
+                const visualizationUrl = await memoryService.getVisualizationUrl(context.adventure.id);
+                const visualizationLink = context.language === 'en-US'
+                    ? `\n\n🔍 [View Adventure Map](file://${visualizationUrl})`
+                    : `\n\n🔍 [Ver Mapa da Aventura](file://${visualizationUrl})`;
+                formattedResponse += visualizationLink;
+
+                logger.info(`Created scene memory and visualization for action: ${action}`);
             } catch (memoryError) {
                 logger.error('Error creating scene memory:', memoryError);
                 // Continue execution even if memory creation fails
             }
         }
 
-        const formattedResponse = context.language === 'en-US' 
-            ? `📖 **Narration**\n${parsedResponse.narration}\n${parsedResponse.atmosphere ? `\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}` : ''}\n\n⚔️ **Available Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}`
-            : `📖 **Narração**\n${parsedResponse.narracao}\n${parsedResponse.atmosfera ? `\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}` : ''}\n\n⚔️ **Ações Disponíveis**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}`;
+        const footerText = context.language === 'en-US'
+            ? `💭 *Use /action for custom actions*`
+            : `💭 *Use /action para ações personalizadas*`;
 
         const suggestedActions = context.language === 'en-US'
             ? parsedResponse.available_actions
@@ -288,6 +300,9 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                     title: '🎭 Action Result',
                     description: formattedResponse,
                     color: 0x99ff99,
+                    footer: {
+                        text: footerText
+                    }
                 }]
             });
         } catch (error) {
@@ -429,6 +444,27 @@ export async function handleButtonAction(interaction: any, action: string) {
         await interaction.deferReply();
         logger.debug(`Player action received.  \n\n${chalk.blue('ACTION: ') + action}\n`);
 
+        // Get the message that contains the buttons
+        const message = await interaction.message.fetch();
+        
+        // Create new button components based on the existing ones
+        const components = message.components[0].components.map((button: any) => ({
+            type: 2,
+            style: button.customId === interaction.customId ? ButtonStyle.Success : ButtonStyle.Secondary,
+            label: button.label,
+            custom_id: button.customId,
+            disabled: true
+        }));
+
+        // Update the message with the new button states
+        await message.edit({
+            embeds: message.embeds,
+            components: [{
+                type: 1,
+                components
+            }]
+        });
+
         const userAdventure = await prisma.adventure.findFirst({
             where: { 
                 players: {
@@ -508,22 +544,23 @@ function createActionButtons(actions: string[]) {
     return actions.slice(0, 5).map(action => {
         // Smart truncation that preserves meaning
         let label = action;
-        if (label.length > 80) {
-            // Try to find a good breakpoint between 70-80 chars
-            const breakPoint = label.substring(0, 77).lastIndexOf(' ');
+        if (label.length > 60) { // Reduced from 80 to 60 to ensure custom_id stays under 100
+            // Try to find a good breakpoint between 50-60 chars
+            const breakPoint = label.substring(0, 57).lastIndexOf(' ');
             if (breakPoint > 0) {
                 label = label.substring(0, breakPoint) + '...';
             } else {
                 // If no good breakpoint, do a hard truncate
-                label = label.substring(0, 77) + '...';
+                label = label.substring(0, 57) + '...';
             }
         }
 
         return {
             type: 2,
-            style: 1,
+            style: ButtonStyle.Primary, // Use Primary (blue) for initial state
             label,
-            custom_id: `action:${action}` // Keep full action in custom_id
+            custom_id: `action:${action.substring(0, 90)}`, // Limit custom_id to 90 chars
+            disabled: false
         };
     });
 }

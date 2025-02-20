@@ -9,3 +9,6 @@ wow.txt
 tts/.DS_Store
 tts/__pycache__
 .npmrc
+/chroma
+/data
+/visualizations

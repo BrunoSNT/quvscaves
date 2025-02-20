@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import ora from 'ora';
 import axios from 'axios';
 import { Character } from '../features/character/types';
-import { calculateVectorSimilarity, findMostSimilarScenes } from '../shared/game/vector';
+import { vectorStore } from '../shared/game/vector';
 
 interface MemoryItem {
     title: string;
@@ -39,10 +39,9 @@ export interface AIResponse {
 function formatContext(context: GameContext): string {
     return `
 ${chalk.cyan('Adventure Settings:')}
-${chalk.gray('Style:')} ${chalk.magenta(context.adventureSettings.worldStyle)}
-${chalk.gray('Tone:')} ${chalk.magenta(context.adventureSettings.toneStyle)}
-${chalk.gray('Magic Level:')} ${chalk.magenta(context.adventureSettings.magicLevel)}
-${context.adventureSettings.setting ? `${chalk.gray('Setting:')} ${chalk.magenta(context.adventureSettings.setting)}` : ''}
+${chalk.gray('Style:')} ${chalk.magenta(context.adventure?.worldStyle)}
+${chalk.gray('Tone:')} ${chalk.magenta(context.adventure?.toneStyle)}
+${chalk.gray('Magic Level:')} ${chalk.magenta(context.adventure?.magicLevel)}
 
 ${chalk.cyan('Current Scene:')}
 ${chalk.gray(context.scene)}
@@ -606,68 +605,41 @@ async function validateNewElements(
     const narration = language === 'en-US' ? response.narration : response.narracao;
     const lastScene = context.memory.recentScenes[0]?.summary || '';
     
-    const validationResults: ValidationResult[] = [];
-    const newElements: StoryElement[] = [];
-    
-    // Check for scene similarity and purpose using vector embeddings
-    const recentScenes = context.memory.recentScenes.slice(0, 5).map(s => s.summary);
-    const similarityResults = await findMostSimilarScenes(narration, recentScenes);
-    
-    if (!similarityResults.similarityMetrics.isValid) {
-        const { purpose } = similarityResults.similarityMetrics;
-        
-        if (similarityResults.similarityMetrics.tooSimilar) {
-            validationResults.push({
-                isValid: false,
-                category: 'SIMILARITY',
-                reason: 'Scene is too similar to a recent scene',
-                details: {
-                    similarityScore: similarityResults.maxSimilarity,
-                    suggestedImprovements: [
-                        'Change the location significantly',
-                        'Introduce unexpected events',
-                        'Add meaningful consequences'
-                    ]
-                }
-            });
-        } else if (similarityResults.similarityMetrics.tooDifferent) {
-            validationResults.push({
-                isValid: false,
-                category: 'COHERENCE',
-                reason: 'Scene lacks connection to recent events',
-                details: {
-                    similarityScore: similarityResults.maxSimilarity,
-                    suggestedImprovements: [
-                        'Reference recent events',
-                        'Build on established elements',
-                        'Maintain story continuity'
-                    ]
-                }
-            });
-        }
-        
-        if (purpose.purposeScore < 0.3) {
-            validationResults.push({
-                isValid: false,
-                category: 'INSUFFICIENT_PROGRESSION',
-                reason: 'Scene lacks clear purpose or progression',
-                details: {
-                    missingElements: [
-                        !purpose.hasProgression ? 'story progression' : '',
-                        !purpose.hasConsequence ? 'meaningful consequences' : '',
-                        !purpose.hasNewElement ? 'new elements' : ''
-                    ].filter(Boolean),
-                    suggestedImprovements: [
-                        'Add clear story progression',
-                        'Show consequences of actions',
-                        'Introduce new story elements'
-                    ]
-                }
-            });
-        }
+    // Check for direct text similarity with recent scenes
+    const recentScenes = context.memory.recentScenes.slice(0, 3).map(s => s.summary);
+    let maxSimilarity = 0;
+    for (const scene of recentScenes) {
+        const similarity = calculateSimilarity(narration.toLowerCase(), scene.toLowerCase());
+        maxSimilarity = Math.max(maxSimilarity, similarity);
     }
 
-    // More lenient location change requirement (every 4 scenes)
+    // Increased similarity threshold from 0.6 to 0.95
+    if (maxSimilarity > 0.95) {
+        logger.warn(`Scene too similar (${maxSimilarity.toFixed(2)}) to recent scene`);
+        return false;
+    }
+
+    // Then check semantic similarity using vector embeddings
+    try {
+        let maxSemanticSimilarity = 0;
+        for (const scene of recentScenes) {
+            const semanticSimilarity = await vectorStore.compareTexts(narration, scene);
+            maxSemanticSimilarity = Math.max(maxSemanticSimilarity, semanticSimilarity);
+        }
+        // Increased semantic similarity threshold from 0.85 to 0.98
+        if (maxSemanticSimilarity > 0.98) {
+            logger.warn(`Scene semantically too similar (${maxSemanticSimilarity.toFixed(2)}) to recent scene`);
+            return false;
+        }
+    } catch (error) {
+        logger.error('Error checking semantic similarity:', error);
+        // Fall back to text similarity if vector comparison fails
+    }
+
+    // Track new elements being introduced
+    const newElements: StoryElement[] = [];
+    
+    // Check for location changes
     const currentLocation = extractLocation(lastScene);
     const newLocation = extractLocation(narration);
     if (newLocation && newLocation !== currentLocation) {
@@ -676,24 +648,10 @@ async function validateNewElements(
             name: newLocation,
             description: narration
         });
-    } else if (context.memory.recentScenes.length > 4) {
-        validationResults.push({
-            isValid: false,
-            category: 'STAGNATION',
-            reason: 'Location has remained unchanged for too long',
-            details: {
-                missingElements: ['new location'],
-                suggestedImprovements: [
-                    'Move to a new area',
-                    'Discover hidden paths',
-                    'Find alternate routes'
-                ]
-            }
-        });
     }
 
-    // Enhanced character detection with name validation
-    const characterMatches = narration.match(/[A-Z][a-z]+(?:\s[A-Z][a-z]+)?/g) || [];
+    // Enhanced character detection with more flexible matching
+    const characterMatches = narration.match(/[A-Z][a-zÀ-ÿ]+(?:\s[A-Z][a-zÀ-ÿ]+)?/g) || [];
     const knownCharacters = new Set((context.memory.knownCharacters || []).map(c => c.title));
     const newChars = characterMatches.filter((name: string) =>
         !knownCharacters.has(name) &&
@@ -709,12 +667,15 @@ async function validateNewElements(
         });
     }
 
-    // Enhanced quest hook detection with more triggers
+    // Quest hook detection with expanded triggers
     const questTriggers = language === 'en-US' 
-        ? ['mission', 'quest', 'task', 'help', 'danger', 'mystery', 'challenge', 'problem', 'request', 'secret', 'legend', 'rumor', 'discover', 'find', 'seek', 'investigate']
-        : ['missão', 'busca', 'tarefa', 'ajuda', 'perigo', 'mistério', 'desafio', 'problema', 'pedido', 'segredo', 'lenda', 'rumor', 'descobrir', 'encontrar', 'procurar', 'investigar'];
+        ? ['mission', 'quest', 'task', 'help', 'danger', 'mystery', 'challenge', 'threat', 'problem', 'situation']
+        : ['missão', 'busca', 'tarefa', 'ajuda', 'perigo', 'mistério', 'desafio', 'ameaça', 'problema', 'situação'];
     
-    const hasQuestHook = new RegExp(questTriggers.join('|'), 'i').test(narration);
+    const hasQuestHook = questTriggers.some(trigger => 
+        narration.toLowerCase().includes(trigger.toLowerCase())
+    );
+    
     if (hasQuestHook) {
         newElements.push({
             type: 'quest',
@@ -723,18 +684,98 @@ async function validateNewElements(
         });
     }
 
-    // Success criteria: Must have valid purpose OR introduce new elements
-    const hasValidPurpose = similarityResults.similarityMetrics.isValid;
+    // More flexible scene purpose evaluation
+    const purpose = evaluateScenePurpose(narration);
+    const hasValidPurpose = purpose.purposeScore >= 0.3; // Reduced from 0.4 to 0.3
     const hasNewElements = newElements.length > 0;
+    const hasProgressiveAction = evaluateProgressiveAction(narration, context);
 
     // Log validation results
     logger.debug('Story progression validation:', {
-        validationResults,
+        textSimilarityScore: maxSimilarity,
+        semanticSimilarityPassed: true,
         newElements,
-        similarityResults,
+        purpose,
         hasValidPurpose,
-        hasNewElements
+        hasNewElements,
+        hasProgressiveAction
     });
 
-    return hasValidPurpose || hasNewElements;
+    // Accept if any of these conditions are met
+    return hasValidPurpose || hasNewElements || hasProgressiveAction;
+}
+
+// New helper function to evaluate if the action progresses the story
+function evaluateProgressiveAction(narration: string, context: GameContext): boolean {
+    const progressiveKeywords = [
+        'reveal', 'discover', 'notice', 'realize', 'understand', 'learn', 'find', 'observe',
+        'revela', 'descobre', 'nota', 'percebe', 'entende', 'aprende', 'encontra', 'observa'
+    ];
+
+    const emotionalKeywords = [
+        'feel', 'worry', 'fear', 'hope', 'trust', 'doubt', 'suspect',
+        'sente', 'preocupa', 'teme', 'espera', 'confia', 'duvida', 'suspeita'
+    ];
+
+    const hasProgressiveAction = progressiveKeywords.some(keyword => 
+        narration.toLowerCase().includes(keyword.toLowerCase())
+    );
+
+    const hasEmotionalDevelopment = emotionalKeywords.some(keyword => 
+        narration.toLowerCase().includes(keyword.toLowerCase())
+    );
+
+    return hasProgressiveAction || hasEmotionalDevelopment;
+}
+
+interface ScenePurpose {
+    hasProgression: boolean;
+    hasConsequence: boolean;
+    hasNewElement: boolean;
+    purposeScore: number;
+}
+
+function evaluateScenePurpose(scene: string): ScenePurpose {
+    // Check for story progression indicators
+    const progressionKeywords = [
+        'reveals', 'discovers', 'realizes', 'understands', 'notices',
+        'revela', 'descobre', 'percebe', 'entende', 'nota'
+    ];
+
+    // Check for consequence indicators
+    const consequenceKeywords = [
+        'because', 'therefore', 'as a result', 'consequently',
+        'porque', 'portanto', 'como resultado', 'consequentemente'
+    ];
+
+    // Check for new element indicators
+    const newElementKeywords = [
+        'new', 'unexpected', 'suddenly', 'mysterious', 'strange',
+        'novo', 'inesperado', 'repentinamente', 'misterioso', 'estranho'
+    ];
+
+    const hasProgression = progressionKeywords.some(keyword => 
+        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
+    );
+
+    const hasConsequence = consequenceKeywords.some(keyword => 
+        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
+    );
+
+    const hasNewElement = newElementKeywords.some(keyword => 
+        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
+    );
+
+    const purposeScore = (
+        (hasProgression ? 0.4 : 0) +
+        (hasConsequence ? 0.3 : 0) +
+        (hasNewElement ? 0.3 : 0)
+    );
+
+    return {
+        hasProgression,
+        hasConsequence,
+        hasNewElement,
+        purposeScore
+    };
 }
