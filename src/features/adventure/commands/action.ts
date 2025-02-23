@@ -26,7 +26,7 @@ import { formatCharacterSheet } from '../../../shared/discord/sheet';
 const adventureService = new AdventureService();
 const activeConnections = new Map<string, VoiceConnection>();
 
-const ACTION_CONCEPTS = {
+export const ACTION_CONCEPTS = {
     "en-US": {
         "combat": {
             concepts: ["fight", "attack", "battle", "weapon", "sword", "hit", "kill", "defend", "strike", "combat", "slash", "block", "parry", "dodge", "shield"],
