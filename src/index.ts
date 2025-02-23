@@ -25,8 +25,10 @@ import { handleCreateAdventure } from './features/adventure/commands/create';
 import { handleRegister } from './features/user/commands/register';
 import { handleHelp } from './features/user/commands/help';
 import { handleLinkWallet } from './features/wallet/commands/link';
-import { logger } from './shared/logger';
+import { logger, prettyPrintLog } from './shared/logger';
 import { handleButtonAction } from './features/adventure/commands/action';
+import { initializeMemorySystem } from './core/memory/init';
+import { VectorStore } from './core/vector/store';
 
 // Suppress punycode deprecation warning
 process.removeAllListeners('warning');
@@ -313,12 +315,12 @@ client.on(Events.InteractionCreate, async interaction => {
                 const selectedCharacters = currentInput.split(/,\s*/).filter(Boolean);
                 const searchTerm = selectedCharacters[selectedCharacters.length - 1]?.toLowerCase() || '';
 
-                logger.debug('Create adventure autocomplete:', {
+                logger.debug('Create adventure autocomplete:\n' + prettyPrintLog(JSON.stringify({
                     currentInput,
                     selectedCharacters,
                     searchTerm,
                     availableCharacters: user.characters.length
-                });
+                })) + "\n\n");
 
                 // Get only user's own characters
                 const availableCharacters = user.characters.filter(char => {
@@ -569,16 +571,33 @@ client.on(Events.InteractionCreate, async interaction => {
 
     if (interaction.isButton()) {
         try {
-            if (interaction.customId.startsWith('action:')) {
-                const action = interaction.customId.replace('action:', '');
-                await handleButtonAction(interaction, action);
+            if (interaction.customId.startsWith('action_')) {
+                const clickedButton = interaction.message.components[0].components.find(
+                    (button: any) => button.customId === interaction.customId
+                ) as { label: string };
+                
+                if (!clickedButton) {
+                    throw new Error('Button not found');
+                }
+
+                await handleButtonAction(interaction, clickedButton.label);
+            } else if (interaction.customId.startsWith('roll_')) {
+                // Handle roll button interaction
+                const { handleRollAction } = await import('./features/adventure/commands/action');
+                await handleRollAction(interaction);
             }
         } catch (error) {
             logger.error('Error handling button interaction:', error);
-            await interaction.reply({ 
-                content: 'There was an error processing your action.', 
-                flags: MessageFlags.Ephemeral
-            });
+            const errorMessage = { 
+                content: 'There was an error processing your action.',
+                flags: 1 << 6 // MessageFlags.Ephemeral
+            };
+            
+            if (interaction.deferred) {
+                await interaction.editReply(errorMessage);
+            } else {
+                await interaction.reply(errorMessage);
+            }
         }
     }
 
@@ -677,4 +696,28 @@ process.on('SIGINT', async () => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN); 
+async function main() {
+    try {
+        // Load environment variables
+        dotenv.config();
+
+        // Initialize vector store
+        const vectorStore = VectorStore.getInstance();
+        await vectorStore.initialize();
+        logger.info('Vector store initialized');
+
+        // Initialize memory system
+        await initializeMemorySystem();
+        logger.info('Memory system initialized');
+
+        // Start your application...
+        logger.info('Application started');
+
+        client.login(process.env.DISCORD_TOKEN);
+    } catch (error) {
+        logger.error('Error starting application:', error);
+        process.exit(1);
+    }
+}
+
+main(); 

@@ -2,38 +2,381 @@ import { GameContext } from '../shared/game/types';
 import { SupportedLanguage } from '../shared/i18n/types';
 import { logger, prettyPrintLog } from '../shared/logger';
 import { buildContextString, getGamePrompt, createFallbackResponse } from '../shared/game/prompts';
+import { Orchestrator } from './orchestrator';
+import { config } from '../core/config';
 import chalk from 'chalk';
 import ora from 'ora';
 import axios from 'axios';
-import { Character } from '../features/character/types';
-import { vectorStore } from '../shared/game/vector';
-
-interface MemoryItem {
-    title: string;
-    description: string;
-    type?: string;
-}
-
-interface CombatParticipant {
-    id: string;
-    initiative: number;
-    health: number;
-    maxHealth: number;
-    statusEffects: string[];
-}
-
-interface StoryElement {
-    type: 'location' | 'character' | 'quest' | 'item' | 'plot';
-    name: string;
-    description: string;
-}
-
-const AI_ENDPOINT = process.env.OLLAMA_URL ? `${process.env.OLLAMA_URL}/api/generate` : 'http://localhost:11434/api/generate';
-const AI_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+import { VectorStore } from '../core/vector/store';
+import { calculateSimilarity } from '../shared/game/calculations';
+import { CombatDetectionResult, CombatState, GameReward } from '../shared/game/types';
+import { SkillCheck, SkillCheckResult, formatSkillCheckResult } from '../shared/game/skills';
+import { SkillCheckAnalyzer } from './skillcheck';
+import { RewardAnalyzer } from './reward';
+import { QwenClient } from './qwen';
 
 export interface AIResponse {
     response?: string;
     error?: string;
+}
+
+export class GameMaster {
+    private orchestrator: Orchestrator;
+    private maxRetries: number = 3;
+    private skillCheckAnalyzer: SkillCheckAnalyzer;
+    private rewardAnalyzer: RewardAnalyzer;
+    private llm: QwenClient;
+
+    constructor(adventureId: string) {
+        this.orchestrator = new Orchestrator(adventureId);
+        this.skillCheckAnalyzer = SkillCheckAnalyzer.getInstance(adventureId);
+        this.rewardAnalyzer = RewardAnalyzer.getInstance(adventureId);
+        this.llm = new QwenClient(adventureId);
+    }
+
+    public async determineSkillCheck(action: string, context: GameContext): Promise<SkillCheck | null> {
+        try {
+            logger.debug('Analyzing action for skill check:', {
+                action,
+                context: context.additionalContext
+            });
+
+            const skillCheck = await this.skillCheckAnalyzer.analyze(action, context);
+            
+            if (skillCheck) {
+                logger.info('Determined skill check:', {
+                    skill: skillCheck.skill,
+                    difficulty: skillCheck.difficulty,
+                    advantage: skillCheck.advantage,
+                    disadvantage: skillCheck.disadvantage
+                });
+            } else {
+                logger.debug('No skill check required for action');
+            }
+
+            return skillCheck;
+        } catch (error) {
+            logger.error('Error determining skill check:', error);
+            return null;
+        }
+    }
+
+    async generateResponse(context: GameContext): Promise<string> {
+        let retryCount = 0;
+        let lastError: Error | null = null;
+
+        while (retryCount < this.maxRetries) {
+            try {
+                const response = await this.attemptResponse(context, retryCount);
+                if (response) {
+                    return response;
+                }
+                retryCount++;
+            } catch (error) {
+                lastError = error as Error;
+                logger.error(`Error generating response (attempt ${retryCount + 1}):`, error);
+                retryCount++;
+            }
+        }
+
+        // If all retries failed, return a fallback response
+        logger.error('All response generation attempts failed:', lastError);
+        return createFallbackResponse(context.language);
+    }
+
+    private async attemptResponse(context: GameContext, retryCount: number): Promise<string> {
+        const spinner = ora({
+            text: chalk.cyan('Generating AI response...\n\n'),
+            spinner: 'dots12'
+        });
+
+        try {
+            // Get enhanced context from orchestrator
+            const enhancedContext = await this.orchestrator.getEnhancedContext(context);
+            
+            const language = context.language;
+            const lastSceneSummary = context.memory.recentScenes[0]?.summary || '';
+            
+            // Enhanced scene stagnation check
+            const isSceneStagnating = context.memory.recentScenes
+                .slice(0, 3)
+                .every(scene => 
+                    calculateSimilarity(scene.summary, lastSceneSummary) > 0.6
+                );
+
+            // Dynamic temperature and penalty adjustments
+            const temperature = Math.min(0.9 + (retryCount * 0.15) + (isSceneStagnating ? 0.2 : 0), 1.4);
+            const presencePenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
+            const frequencyPenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
+
+            const prompt = getGamePrompt(language as SupportedLanguage);
+            const contextStr = buildContextString(enhancedContext, language as SupportedLanguage);
+
+            // Construct the full prompt
+            const fullPrompt = `<|im_start|>system
+${prompt.system}
+${prompt.intro}
+
+CURRENT GAME CONTEXT:
+${contextStr}
+
+ADDITIONAL CONTEXT:
+${enhancedContext.additionalContext?.join('\n')}
+
+REASONING HISTORY:
+${enhancedContext.reasoning?.join('\n')}
+
+RESPONSE FORMAT:
+You MUST respond with a valid JSON object. No other text or formatting is allowed.
+The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
+
+${language === 'en-US' ? `{
+    "narration": "Vivid book like description introducing new story elements and develiping the plot. MUST advance plot and show consequences. DO NOT REPEAT previous scenes. Between 800 and 1200 characters.",
+    "atmosphere": "(Optional) Current mood, weather, and environmental details",
+    "available_actions": [
+        "Action 1 that leads to new discoveries or progression",
+        "Action 2 that develops character relationships",
+        "Action 3 that advances the current situation",
+        "Action 4 that asks for more details and information about the scene or character",
+        "Action 5 that regresses the current situation"
+    ]
+}` : `{
+    "narracao": "Descrição vívida, como em livro, introduzindo novos elementos e desenvolvendo o enredo. DEVE avançar a história e mostrar consequências. NÃO REPITA cenas anteriores. Entre 800 e 1200 caracteres.",
+    "atmosfera": "(Opcional) Humor atual, clima e detalhes do ambiente",
+    "acoes_disponiveis": [
+        "Ação 1 que leva a novas descobertas ou progressão",
+        "Ação 2 que desenvolve relacionamentos",
+        "Ação 3 que avança a situação atual",
+        "Ação 4 pede mais detalhes e informações sobre a cena ou personagem",
+        "Ação 5 que regride a situação atual",
+    ]
+}`}
+<|im_end|>
+<|im_start|>user
+${context.playerActions[0]}
+<|im_end|>`;
+
+            // Log the raw input being sent to the AI
+            logger.debug('Raw AI Input:\n' + prettyPrintLog(JSON.stringify({
+                playerAction: context.playerActions[0],
+                language,
+                temperature,
+                presencePenalty,
+                frequencyPenalty,
+                isSceneStagnating,
+                retryCount
+            })) + "\n\n");
+
+            // Log the full prompt
+            logger.debug('Full AI Prompt:\n' + prettyPrintLog(fullPrompt) + "\n\n");
+
+            spinner.start();
+            
+            const response = await axios.post(`${config.vector.ollamaUrl}/api/generate`, {
+                model: config.vector.ollamaModel,
+                prompt: fullPrompt,
+                temperature,
+                max_tokens: 32768,
+                top_p: 0.95,
+                repeat_penalty: 1.5,
+                presence_penalty: presencePenalty,
+                frequency_penalty: frequencyPenalty,
+                stop: ["<|im_end|>"],
+                stream: false
+            });
+
+            // Log the raw response from the AI
+            logger.debug('Raw AI Response:\n' + prettyPrintLog(JSON.stringify({
+                responseType: typeof response.data,
+                responseLength: typeof response.data === 'string' ? response.data.length : JSON.stringify(response.data).length
+            })) + "\n\n");
+
+            let responseContent: any;
+            
+            try {
+                // Extract the response content
+                if (typeof response.data === 'object' && response.data.response) {
+                    // Try to find a valid JSON object in the response
+                    const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        responseContent = JSON.parse(jsonMatch[0]);
+                        logger.debug('Extracted JSON from response object:\n' + prettyPrintLog(JSON.stringify({
+                            extractedJson: jsonMatch[0],
+                            parsedContent: responseContent
+                        })) + "\n\n");
+                    } else {
+                        logger.error('No JSON object found in response:', response.data.response);
+                        throw new Error('No valid JSON found in response');
+                    }
+                } else if (typeof response.data === 'string') {
+                    const jsonMatch = response.data.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        responseContent = JSON.parse(jsonMatch[0]);
+                        logger.debug('Extracted JSON from response string:\n' + prettyPrintLog(JSON.stringify({
+                            extractedJson: jsonMatch[0],
+                            parsedContent: responseContent
+                        })) + "\n\n");
+                    } else {
+                        logger.error('No JSON object found in response string:', response.data);
+                        throw new Error('No valid JSON found in response');
+                    }
+                }
+
+                // Validate response structure
+                if (!this.isValidResponse(responseContent, language as SupportedLanguage)) {
+                    logger.error('Invalid response structure:\n' + prettyPrintLog(JSON.stringify({
+                        responseContent,
+                        expectedKeys: language === 'en-US' 
+                            ? ['narration', 'available_actions'] 
+                            : ['narracao', 'acoes_disponiveis']
+                    })) + "\n\n");
+                    throw new Error('Invalid response structure');
+                }
+
+                // Only process input and store response after validation
+                await this.orchestrator.processInput(context.playerActions[0], context);
+                await this.orchestrator.storeResponse(JSON.stringify(responseContent), context);
+
+                spinner.stop();
+                return JSON.stringify(responseContent);
+            } catch (error) {
+                logger.error('Error parsing AI response:', error);
+                throw error;
+            }
+        } catch (error) {
+            spinner.stop();
+            throw error;
+        }
+    }
+
+    private isValidResponse(response: any, language: SupportedLanguage): boolean {
+        if (!response || typeof response !== 'object') return false;
+
+        if (language === 'en-US') {
+            return (
+                typeof response.narration === 'string' &&
+                Array.isArray(response.available_actions) &&
+                response.available_actions.length > 0
+            );
+        } else {
+            return (
+                typeof response.narracao === 'string' &&
+                Array.isArray(response.acoes_disponiveis) &&
+                response.acoes_disponiveis.length > 0
+            );
+        }
+    }
+
+    private formatResponse(response: any, language: SupportedLanguage): string {
+        if (language === 'en-US') {
+            return `${response.narration}\n\n${response.atmosphere ? `Atmosphere: ${response.atmosphere}\n\n` : ''}Available Actions:\n${response.available_actions.map((action: string) => `• ${action}`).join('\n')}`;
+        } else {
+            return `${response.narracao}\n\n${response.atmosfera ? `Atmosfera: ${response.atmosfera}\n\n` : ''}Ações Disponíveis:\n${response.acoes_disponiveis.map((action: string) => `• ${action}`).join('\n')}`;
+        }
+    }
+
+    async syncKnowledge(): Promise<void> {
+        await this.orchestrator.syncKnowledge();
+    }
+
+    clearWorkingMemory(): void {
+        this.orchestrator.clearWorkingMemory();
+    }
+
+    public async detectCombatIntent(action: string, context: GameContext): Promise<CombatDetectionResult> {
+        // Use vector embeddings to detect combat intent
+        const combatEmbeddings = await VectorStore.getInstance().compareWithConcepts(action, ['combat', 'attack', 'fight', 'aggressive']);
+        const isCombatIntent = combatEmbeddings.similarity > 0.75;
+
+        if (isCombatIntent) {
+            // Identify potential participants
+            const participants = context.characters.map(char => char.id);
+            
+            return {
+                isCombat: true,
+                participants,
+                triggerAction: action
+            };
+        }
+
+        return { isCombat: false };
+    }
+
+    public async initializeCombat(context: GameContext, combatDetails: CombatDetectionResult): Promise<CombatState> {
+        // Roll initiative for all participants
+        const participants = combatDetails.participants?.map(id => {
+            const character = context.characters.find(c => c.id === id);
+            const initiative = Math.floor(Math.random() * 20) + 1 + (character?.stats?.dexterity || 0);
+            return {
+                id,
+                initiative,
+                health: character?.health || 0,
+                maxHealth: character?.maxHealth || 0,
+                statusEffects: []
+            };
+        }) || [];
+
+        // Sort by initiative
+        participants.sort((a, b) => b.initiative - a.initiative);
+
+        const combatState: CombatState = {
+            status: 'ACTIVE',
+            round: 1,
+            currentTurn: participants[0]?.id || '',
+            turnOrder: participants.map(p => p.id),
+            participants,
+            availableActions: [],
+            roundHistory: []
+        };
+
+        return combatState;
+    }
+
+    private formatDebugInfo(context: GameContext): string {
+        return `${chalk.cyan('Debug Info:')}
+    
+${chalk.yellow('Discovered Locations:')}
+${context.memory.discoveredLocations.map(loc => chalk.gray(`- ${loc.title}: ${loc.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.yellow('Important Items:')}
+${context.memory.importantItems.map(item => chalk.gray(`- ${item.title}: ${item.description}`)).join('\n') || chalk.gray('None')}
+
+${chalk.cyan('Combat Status:')} ${context.combat ? chalk.yellow('Active') : chalk.gray('None')}
+${context.combat ? `Round: ${chalk.yellow(context.combat.round)}
+Current Turn: ${chalk.yellow(context.combat.currentTurn)}
+Participants:
+${context.combat.participants.map(p => chalk.gray(`- ${p.id} (Initiative: ${p.initiative}, Health: ${p.health}/${p.maxHealth})
+  Status Effects: ${p.statusEffects.join(', ') || 'None'}`)).join('\n')}` : ''}
+
+${chalk.cyan('Recent Action:')} ${chalk.yellow(context.playerActions[0])}
+${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
+`;
+    }
+
+    async determineRewards(action: string, context: GameContext): Promise<GameReward[] | null> {
+        try {
+            logger.debug('Analyzing action for rewards:', {
+                action,
+                context: context.additionalContext
+            });
+
+            const rewards = await this.rewardAnalyzer.analyze(action, context);
+            
+            if (rewards?.length) {
+                logger.info('Determined rewards:', {
+                    count: rewards.length,
+                    types: rewards.map(r => r.type)
+                });
+            } else {
+                logger.debug('No rewards determined for action');
+            }
+
+            return rewards;
+        } catch (error) {
+            logger.error('Error determining rewards:', error);
+            return null;
+        }
+    }
 }
 
 function formatContext(context: GameContext): string {
@@ -75,771 +418,5 @@ ${context.memory.discoveredLocations.map(loc => chalk.gray(`- ${loc.title}: ${lo
 
 ${chalk.yellow('Important Items:')}
 ${context.memory.importantItems.map(item => chalk.gray(`- ${item.title}: ${item.description}`)).join('\n') || chalk.gray('None')}
-
-${chalk.cyan('Combat Status:')} ${context.combat ? chalk.yellow('Active') : chalk.gray('None')}
-${context.combat ? `Round: ${chalk.yellow(context.combat.round)}
-Current Turn: ${chalk.yellow(context.combat.currentTurn)}
-Participants:
-${context.combat.participants.map(p => chalk.gray(`- ${p.id} (Initiative: ${p.initiative}, Health: ${p.health}/${p.maxHealth})
-  Status Effects: ${p.statusEffects.join(', ') || 'None'}`)).join('\n')}` : ''}
-
-${chalk.cyan('Recent Action:')} ${chalk.yellow(context.playerActions[0])}
-${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 `;
-}
-
-export async function generateResponse(context: GameContext): Promise<string> {
-    const maxRetries = 3;
-    let retryCount = 0;
-    let lastError = null;
-
-    while (retryCount < maxRetries) {
-        try {
-            const response = await attemptResponse(context, retryCount, lastError ? `Retry ${retryCount + 1}/${maxRetries}: ${lastError}` : undefined);
-            return response;
-        } catch (error: any) {
-            lastError = error.message;
-            retryCount++;
-            logger.warn(`Attempt ${retryCount}/${maxRetries} failed: ${error.message}`);
-            
-            if (retryCount === maxRetries) {
-                logger.error('All retry attempts failed');
-                throw error;
-            }
-            
-            // Wait before retrying (exponential backoff)
-            await new Promise(resolve => setTimeout(resolve, Math.pow(2, retryCount) * 1000));
-        }
-    }
-
-    throw new Error('Failed to generate response after all retries');
-}
-
-// Add utility function for text similarity
-function calculateSimilarity(str1: string, str2: string): number {
-    const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
-    
-    if (longer.length === 0) {
-        return 1.0;
-    }
-    
-    const editDistance = levenshteinDistance(longer, shorter);
-    return (1.0 - editDistance / longer.length);
-}
-
-function levenshteinDistance(str1: string, str2: string): number {
-    const matrix: number[][] = [];
-    
-    for (let i = 0; i <= str1.length; i++) {
-        matrix[i] = [i];
-    }
-    
-    for (let j = 0; j <= str2.length; j++) {
-        matrix[0][j] = j;
-    }
-    
-    for (let i = 1; i <= str1.length; i++) {
-        for (let j = 1; j <= str2.length; j++) {
-            if (str1[i-1] === str2[j-1]) {
-                matrix[i][j] = matrix[i-1][j-1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i-1][j-1] + 1,
-                    matrix[i][j-1] + 1,
-                    matrix[i-1][j] + 1
-                );
-            }
-        }
-    }
-    
-    return matrix[str1.length][str2.length];
-}
-
-// Add helper function for location rotation
-function getLocationRotationPrompt(context: GameContext): string {
-    const recentLocations = context.memory.recentScenes
-        .slice(0, 3)
-        .map(s => extractLocation(s.summary))
-        .filter(Boolean);
-
-    if (recentLocations.length >= 3 && new Set(recentLocations).size === 1) {
-        return '⚠️ MUST CHANGE LOCATION - Scene has been in same place too long!';
-    }
-    return 'Consider moving to a new area to maintain story momentum';
-}
-
-function getProgressionRequirements(context: GameContext): string {
-    const sceneCount = context.memory.recentScenes.length;
-    const needsNewLocation = sceneCount > 3;
-    const needsQuestHook = !context.memory.activeQuests.length;
-    const hasCharacters = context.memory.knownCharacters.length > 0;
-    const recentLocations = context.memory.recentScenes
-        .slice(0, 3)
-        .map(s => extractLocation(s.summary))
-        .filter(Boolean);
-    const isLocationStagnant = recentLocations.length >= 3 && new Set(recentLocations).size === 1;
-
-    return `STRICT STORY PROGRESSION REQUIREMENTS:
-
-${needsNewLocation || isLocationStagnant ? '⚠️ LOCATION CHANGE REQUIRED - Must move to a new area!' : ''}
-${needsQuestHook ? '⚠️ QUEST HOOK REQUIRED - Must introduce a new mission or objective!' : ''}
-
-1. MUST introduce ONE of these per response:
-   ${needsNewLocation ? '⚠️ NEW LOCATION REQUIRED' : '◻ New character'}
-   ${needsQuestHook ? '⚠️ QUEST HOOK REQUIRED' : '◻ Plot twist'}
-   ◻ Unique environmental hazard
-   ◻ Mysterious artifact/object
-
-2. Location Rotation Required:
-   Previous locations: ${context.memory.discoveredLocations.map(l => l.title).join(', ') || 'None'}
-   ${getLocationRotationPrompt(context)}
-
-3. Character Development:
-   Current relationships: ${(context.memory.knownCharacters || []).map(c => c.title).join(', ') || 'None'}
-   Must ${hasCharacters ? 'deepen existing relationships' : 'establish new relationships'}
-   Show character reactions and emotions
-
-4. NARRATIVE STRUCTURE:
-   - Beginning: Set the scene and initial reaction to player's action
-   - Development: Show consequences and interactions
-   - Conclusion: Clear resolution of the immediate situation
-   - NO CLIFFHANGERS OR QUESTIONS at the end
-   - End with a clear state of the situation
-
-5. ACTION CONSEQUENCES:
-   - Show immediate effects of player choices
-   - Change NPC attitudes or behavior
-   - Modify environment or situation
-   - Progress toward goals
-
-6. NARRATIVE TENSION:
-   - Build mystery or conflict
-   - Create anticipation
-   - Add environmental or situational changes
-
-PREVIOUS SCENES:
-${context.memory.recentScenes.slice(0, 3).map(s => `- ${s.summary}`).join('\n')}
-
-RESPONSE FORMAT REQUIREMENTS:
-For ${context.language === 'en-US' ? 'English' : 'Portuguese'}:
-
-${context.language === 'en-US' ? `{
-    "narration": "Must follow three-part structure:
-        1. BEGINNING - Set the scene and initial reaction
-        2. DEVELOPMENT - Show consequences and interactions
-        3. CONCLUSION - Clear resolution without questions or cliffhangers",
-    "atmosphere": "Current mood, weather, and environmental details",
-    "available_actions": [
-        "Action 1 that follows from the concluded scene",
-        "Action 2 that builds on the current situation",
-        "Action 3 that explores new possibilities"
-    ]
-}` : `{
-    "narracao": "Deve seguir estrutura em três partes:
-        1. INÍCIO - Estabelecer a cena e reação inicial
-        2. DESENVOLVIMENTO - Mostrar consequências e interações
-        3. CONCLUSÃO - Resolução clara sem perguntas ou suspense",
-    "atmosfera": "Humor atual, clima e detalhes do ambiente",
-    "acoes_disponiveis": [
-        "Ação 1 que segue a cena concluída",
-        "Ação 2 que desenvolve a situação atual",
-        "Ação 3 que explora novas possibilidades"
-    ]
-}`}
-
-FAILURE TO MEET THESE REQUIREMENTS WILL RESULT IN RESPONSE REJECTION.`;
-}
-
-async function attemptResponse(context: GameContext, retryCount: number, retryReason?: string): Promise<string> {
-    const spinner = ora({
-        text: chalk.cyan('Generating AI response...\n\n'),
-        spinner: 'dots12'
-    });
-
-    try {
-        const language = context.language;
-        const lastSceneSummary = context.memory.recentScenes[0]?.summary || '';
-        
-        // Enhanced scene stagnation check
-        const isSceneStagnating = context.memory.recentScenes
-            .slice(0, 3)
-            .every(scene => 
-                calculateSimilarity(scene.summary, lastSceneSummary) > 0.6
-            );
-
-        // Dynamic temperature and penalty adjustments
-        const temperature = Math.min(0.9 + (retryCount * 0.15) + (isSceneStagnating ? 0.2 : 0), 1.4);
-        const presencePenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
-        const frequencyPenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
-
-        // Build memory context
-        const memoryContext = `
-MEMORY CONTEXT:
-1. Recent Scenes:
-${context.memory.recentScenes.map((scene, i) => `   ${i + 1}. ${scene.summary}`).join('\n')}
-
-2. Known Characters:
-${context.memory.knownCharacters.map(char => `   - ${char.title}: ${char.description}`).join('\n')}
-
-3. Active Quests:
-${context.memory.activeQuests.map(quest => `   - ${quest.title}: ${quest.description}`).join('\n')}
-
-4. Discovered Locations:
-${context.memory.discoveredLocations.map(loc => `   - ${loc.title}: ${loc.description}`).join('\n')}
-
-5. Important Items:
-${context.memory.importantItems.map(item => `   - ${item.title}: ${item.description}`).join('\n')}
-
-NARRATIVE PROGRESSION REQUIREMENTS:
-1. DO NOT REPEAT previous scenes or actions
-2. MUST ADVANCE the story with one of:
-   - New location discovery
-   - Character development
-   - Quest progression
-   - Environmental change
-3. MUST SHOW CONSEQUENCES of previous actions
-4. MUST MAINTAIN CONTINUITY with previous scenes
-5. MUST ADD TENSION or mystery
-
-SCENE STRUCTURE:
-1. Reference relevant past events
-2. Describe immediate consequences
-3. Introduce new story elements
-4. Create anticipation for what's next
-`;
-
-        const progressionPrompt = getProgressionRequirements(context);
-        const contextStr = buildContextString(context, language);
-        const prompt = getGamePrompt(language);
-        
-        const reinforcementPrompt = retryReason ? `
-PREVIOUS RESPONSE WAS INVALID: ${retryReason}
-
-${progressionPrompt}
-${memoryContext}
-
-IMPORTANT: You MUST respond with ONLY a valid JSON object. Your last response was rejected.
-The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
-
-${language === 'en-US' ? `{
-    "narration": "Vivid description of environment and results of player actions. MUST advance the story and show consequences.",
-    "atmosphere": "(Optional) Current mood, weather, and environmental details",
-    "available_actions": [
-        "Action 1 based on character abilities and current situation",
-        "Action 2 based on character abilities and current situation",
-        "Action 3 based on character abilities and current situation"
-    ]
-}` : `{
-    "narracao": "Descrição vívida do ambiente e resultados das ações do jogador. DEVE avançar a história e mostrar consequências.",
-    "atmosfera": "(Opcional) Humor atual, clima e detalhes do ambiente",
-    "acoes_disponiveis": [
-        "Ação 1 baseada nas habilidades do personagem e situação atual",
-        "Ação 2 baseada nas habilidades do personagem e situação atual",
-        "Ação 3 baseada nas habilidades do personagem e situação atual"
-    ]
-}`}` : progressionPrompt;
-
-        logger.debug('Sending request to AI:\n' + prettyPrintLog(JSON.stringify({
-            endpoint: AI_ENDPOINT,
-            model: AI_MODEL,
-            language,
-            retryCount,
-            retryReason,
-            contextLength: JSON.stringify(context).length,
-            hasReinforcement: !!retryReason,
-            prompt: {
-                system: prompt.system,
-                intro: prompt.intro,
-                contextSentToAI: contextStr,
-                contextFull: prettyPrintLog(JSON.stringify(context)),
-                reinforcementPreview: reinforcementPrompt ? prettyPrintLog(JSON.stringify(reinforcementPrompt)) : 'none',
-            }
-        })));
-        
-
-        logger.debug('Formatted context sent to AI:\n' + formatContext(context) + '\n');
-
-        // Initiate the axios post request
-        const axiosPromise = axios.post(AI_ENDPOINT, {
-            model: AI_MODEL,
-            prompt: `<|im_start|>system
-${prompt.system}
-${prompt.intro}
-
-${progressionPrompt}
-${memoryContext}
-
-CURRENT GAME CONTEXT:
-${contextStr}
-${reinforcementPrompt}
-
-RESPONSE FORMAT:
-You MUST respond with a valid JSON object. No other text or formatting is allowed.
-The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
-
-${language === 'en-US' ? `{
-    "narration": "Vivid description introducing new story elements. MUST advance plot and show consequences. DO NOT REPEAT previous scenes.",
-    "atmosphere": "(Optional) Current mood, weather, and environmental details",
-    "available_actions": [
-        "Action 1 that leads to new discoveries or progression",
-        "Action 2 that develops character relationships",
-        "Action 3 that advances the current situation"
-    ]
-}` : `{
-    "narracao": "Descrição vívida introduzindo novos elementos. DEVE avançar a história e mostrar consequências. NÃO REPITA cenas anteriores.",
-    "atmosfera": "(Opcional) Humor atual, clima e detalhes do ambiente",
-    "acoes_disponiveis": [
-        "Ação 1 que leva a novas descobertas ou progressão",
-        "Ação 2 que desenvolve relacionamentos",
-        "Ação 3 que avança a situação atual"
-    ]
-}`}
-<|im_end|>
-<|im_start|>user
-${context.playerActions[0]}
-<|im_end|>
-`,
-            temperature,
-            max_tokens: 32768,
-            top_p: 0.95,
-            repeat_penalty: 1.5,  // Increased repeat penalty
-            presence_penalty: presencePenalty,
-            frequency_penalty: frequencyPenalty,
-            options: {
-                num_ctx: 32768,
-            },
-            stop: ["<|im_end|>"],
-            stream: false
-        });
-
-        // Start the spinner after the axios post call has been initiated
-        spinner.start();
-
-        const response = await axiosPromise;
-
-        let fullResponse = '';
-        if (typeof response.data === 'object' && response.data.response) {
-            fullResponse = response.data.response;
-        } else if (typeof response.data === 'string') {
-            fullResponse = response.data;
-        }
-
-        logger.debug('Raw AI response:\n' + prettyPrintLog(JSON.stringify({
-            responseLength: fullResponse.length,
-            response: fullResponse,
-            isObject: typeof response.data === 'object',
-            hasResponseField: typeof response.data === 'object' && 'response' in response.data
-        })));
-
-        // Clean up the response
-        fullResponse = fullResponse
-            .replace(/<\|im_start\|>assistant/g, '')
-            .replace(/<\|im_end\|>/g, '')
-            .trim();
-
-        // Try to extract JSON from the response
-        const jsonMatch = fullResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-            try {
-                // Validate the extracted JSON is parseable
-                const parsed = JSON.parse(jsonMatch[0]);
-
-                // Additional validation to ensure all required fields are present
-                if (language === 'en-US') {
-                    if (!parsed.narration || !Array.isArray(parsed.available_actions)) {
-                        const error = 'Missing required fields in JSON response';
-                        logger.error(error, parsed);
-                        throw new Error(error);
-                    }
-                    if (parsed.available_actions.length < 3 || parsed.available_actions.length > 5) {
-                        const error = `Invalid number of actions: ${parsed.available_actions.length} (must be 3-5)`;
-                        logger.error(error, parsed);
-                        throw new Error(error);
-                    }
-                } else {
-                    if (!parsed.narracao || !Array.isArray(parsed.acoes_disponiveis)) {
-                        const error = 'Campos obrigatórios ausentes na resposta JSON';
-                        logger.error(error, parsed);
-                        throw new Error(error);
-                    }
-                    if (parsed.acoes_disponiveis.length < 3 || parsed.acoes_disponiveis.length > 5) {
-                        const error = `Número inválido de ações: ${parsed.acoes_disponiveis.length} (deve ser 3-5)`;
-                        logger.error(error, parsed);
-                        throw new Error(error);
-                    }
-                }
-
-                // Ensure atmosphere is always present, even if empty
-                if (language === 'en-US') {
-                    parsed.atmosphere = parsed.atmosphere || '';
-                } else {
-                    parsed.atmosfera = parsed.atmosfera || '';
-                }
-
-                // Validate story progression
-                if (isSceneStagnating) {
-                    const newScene = language === 'en-US' ? parsed.narration : parsed.narracao;
-                    if (calculateSimilarity(newScene, lastSceneSummary) > 0.6) {
-                        throw new Error('Scene is not progressing enough - needs more significant changes');
-                    }
-                }
-
-                // Ensure new elements are introduced
-                const hasNewElements = await validateNewElements(parsed, context, language);
-                if (!hasNewElements) {
-                    throw new Error('Response must introduce new story elements');
-                }
-
-                // Clear reinforcement fields after successful validation
-                if (retryReason) {
-                    logger.debug('Clearing reinforcement fields after successful response');
-                    retryReason = undefined;
-                }
-
-                fullResponse = JSON.stringify(parsed);
-            } catch (parseError: any) {
-                logger.error('Failed to parse or validate JSON response:\n' + prettyPrintLog(JSON.stringify({
-                    error: parseError.message,
-                    response: fullResponse,
-                    jsonMatch: jsonMatch[0]
-                })));
-                throw new Error(`Invalid JSON response from AI: ${parseError.message}`);
-            }
-        } else {
-            logger.error('No JSON found in response:\n' + prettyPrintLog(JSON.stringify({
-                responseLength: fullResponse.length,
-                responsePreview: fullResponse.substring(0, 100)
-            })));
-            throw new Error('No JSON found in AI response');
-        }
-
-        return fullResponse;
-    } finally {
-        spinner.stop();
-    }
-}
-
-interface ValidationResult {
-    isValid: boolean;
-    reason?: string;
-    category?: 'SIMILARITY' | 'MISSING_ELEMENTS' | 'STAGNATION' | 'REPETITION' | 'INSUFFICIENT_PROGRESSION' | 'COHERENCE';
-    details?: {
-        similarityScore?: number;
-        missingElements?: string[];
-        suggestedImprovements?: string[];
-    };
-}
-
-function validateResponseFormat(response: string, language: SupportedLanguage): ValidationResult {
-    try {
-        const parsedResponse = JSON.parse(response);
-        
-        // Allow both English and Portuguese field names
-        const hasNarration = typeof parsedResponse.narration === 'string' || typeof parsedResponse.narracao === 'string';
-        const hasAtmosphere = typeof parsedResponse.atmosphere === 'string' || typeof parsedResponse.atmosfera === 'string';
-        const hasActions = Array.isArray(parsedResponse.available_actions) || Array.isArray(parsedResponse.acoes_disponiveis);
-        const actions = parsedResponse.available_actions || parsedResponse.acoes_disponiveis;
-
-        if (!hasNarration) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US' 
-                    ? 'Missing or invalid "narration/narracao" field - must be a string'
-                    : 'Campo "narration/narracao" ausente ou inválido - deve ser uma string'
-            };
-        }
-
-        if (!hasAtmosphere) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US'
-                    ? 'Missing or invalid "atmosphere/atmosfera" field - must be a string'
-                    : 'Campo "atmosphere/atmosfera" ausente ou inválido - deve ser uma string'
-            };
-        }
-
-        if (!hasActions) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US'
-                    ? 'Missing or invalid "available_actions/acoes_disponiveis" field - must be an array'
-                    : 'Campo "available_actions/acoes_disponiveis" ausente ou inválido - deve ser um array'
-            };
-        }
-
-        if (actions.length < 3 || actions.length > 5) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US'
-                    ? `Invalid number of actions: ${actions.length} (must be 3-5)`
-                    : `Número inválido de ações: ${actions.length} (deve ser 3-5)`
-            };
-        }
-
-        if (!actions.every((action: any) => typeof action === 'string')) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US'
-                    ? 'All actions must be strings'
-                    : 'Todas as ações devem ser strings'
-            };
-        }
-
-        // Check for extra fields, but allow both English and Portuguese field names
-        const allowedFields = [
-            'narration', 'narracao',
-            'atmosphere', 'atmosfera',
-            'available_actions', 'acoes_disponiveis'
-        ];
-        
-        const extraFields = Object.keys(parsedResponse).filter(key => !allowedFields.includes(key));
-        if (extraFields.length > 0) {
-            return { 
-                isValid: false, 
-                reason: language === 'en-US'
-                    ? `Extra fields not allowed: ${extraFields.join(', ')}`
-                    : `Campos extras não permitidos: ${extraFields.join(', ')}`
-            };
-        }
-
-        return { isValid: true };
-    } catch (error) {
-        return { 
-            isValid: false, 
-            reason: language === 'en-US'
-                ? 'Failed to parse response as valid JSON'
-                : 'Falha ao analisar resposta como JSON válido'
-        };
-    }
-}
-
-interface GameOutput {
-    narration?: string;
-    atmosphere?: string;
-    available_actions?: string[];
-    narracao?: string;
-    atmosfera?: string;
-    acoes_disponiveis?: string[];
-}
-
-function extractLocation(scene: string): string {
-    // Extract location details from the scene
-    const locations = ['penhasco', 'cratera', 'abertura', 'buraco', 'superfície'];
-    return locations.filter(loc => scene.toLowerCase().includes(loc)).join(', ');
-}
-
-function extractKnownElements(context: GameContext): string {
-    const characters = (context.memory.knownCharacters || []).map((char: MemoryItem) => char.title);
-    const locations = (context.memory.discoveredLocations || []).map((loc: MemoryItem) => loc.title);
-    const items = (context.memory.importantItems || []).map((item: MemoryItem) => item.title);
-    
-    return [...characters, ...locations, ...items].join(', ');
-}
-
-async function validateNewElements(response: any, context: GameContext, language: SupportedLanguage): Promise<boolean> {
-    const narration = language === 'en-US' ? response.narration : response.narracao;
-    
-    // Check for problematic cliffhangers at the end
-    const lastParagraph = narration.split('\n').pop() || '';
-    const hasDirectQuestion = lastParagraph.trim().endsWith('?');
-    const hasQuestionWord = /\b(what|how|why|where|when|who|qual|como|por que|onde|quando|quem)\b/i.test(lastParagraph);
-    const hasUnresolvedAction = /\b(suddenly|unexpectedly|without warning|de repente|inesperadamente|sem aviso)\b/i.test(lastParagraph);
-    
-    // Allow tension-building endings that don't leave immediate actions unresolved
-    const allowedTensionPatterns = [
-        /aguardando/i,
-        /waiting/i,
-        /mysterious/i,
-        /misterioso/i,
-        /tension/i,
-        /tensão/i,
-        /atmosphere/i,
-        /atmosfera/i,
-        /anticipation/i,
-        /antecipação/i
-    ];
-
-    const hasTensionBuilding = allowedTensionPatterns.some(pattern => pattern.test(lastParagraph));
-    
-    if ((hasDirectQuestion || (hasQuestionWord && !hasTensionBuilding) || hasUnresolvedAction) && 
-        !lastParagraph.includes('"') && // Ignore questions in dialogue
-        !lastParagraph.includes('"')) { // Ignore questions in Portuguese dialogue
-        logger.warn('Narration ends with a problematic cliffhanger or unresolved action');
-        return false;
-    }
-
-    // Check for direct text similarity with recent scenes
-    const recentScenes = context.memory.recentScenes.slice(0, 3).map(s => s.summary);
-    let maxSimilarity = 0;
-    for (const scene of recentScenes) {
-        const similarity = calculateSimilarity(narration.toLowerCase(), scene.toLowerCase());
-        maxSimilarity = Math.max(maxSimilarity, similarity);
-    }
-
-    // Increased similarity threshold from 0.6 to 0.95
-    if (maxSimilarity > 0.95) {
-        logger.warn(`Scene too similar (${maxSimilarity.toFixed(2)}) to recent scene`);
-        return false;
-    }
-
-    // Then check semantic similarity using vector embeddings
-    try {
-        let maxSemanticSimilarity = 0;
-        for (const scene of recentScenes) {
-            const semanticSimilarity = await vectorStore.compareTexts(narration, scene);
-            maxSemanticSimilarity = Math.max(maxSemanticSimilarity, semanticSimilarity);
-        }
-        // Increased semantic similarity threshold from 0.85 to 0.98
-        if (maxSemanticSimilarity > 0.98) {
-            logger.warn(`Scene semantically too similar (${maxSemanticSimilarity.toFixed(2)}) to recent scene`);
-            return false;
-        }
-    } catch (error) {
-        logger.error('Error checking semantic similarity:', error);
-        // Fall back to text similarity if vector comparison fails
-    }
-
-    // Track new elements being introduced
-    const newElements: StoryElement[] = [];
-    
-    // Check for location changes
-    const currentLocation = extractLocation(context.memory.recentScenes[0]?.summary || '');
-    const newLocation = extractLocation(narration);
-    if (newLocation && newLocation !== currentLocation) {
-        newElements.push({
-            type: 'location',
-            name: newLocation,
-            description: narration
-        });
-    }
-
-    // Enhanced character detection with more flexible matching
-    const characterMatches = narration.match(/[A-Z][a-zÀ-ÿ]+(?:\s[A-Z][a-zÀ-ÿ]+)?/g) || [];
-    const knownCharacters = new Set((context.memory.knownCharacters || []).map(c => c.title));
-    const newChars = characterMatches.filter((name: string) =>
-        !knownCharacters.has(name) &&
-        !['Braum'].includes(name) &&
-        name.length > 2
-    );
-    
-    if (newChars.length > 0) {
-        newElements.push({
-            type: 'character',
-            name: newChars[0],
-            description: narration
-        });
-    }
-
-    // Quest hook detection with expanded triggers
-    const questTriggers = language === 'en-US' 
-        ? ['mission', 'quest', 'task', 'help', 'danger', 'mystery', 'challenge', 'threat', 'problem', 'situation']
-        : ['missão', 'busca', 'tarefa', 'ajuda', 'perigo', 'mistério', 'desafio', 'ameaça', 'problema', 'situação'];
-    
-    const hasQuestHook = questTriggers.some(trigger => 
-        narration.toLowerCase().includes(trigger.toLowerCase())
-    );
-    
-    if (hasQuestHook) {
-        newElements.push({
-            type: 'quest',
-            name: 'New Quest Hook',
-            description: narration
-        });
-    }
-
-    // More flexible scene purpose evaluation
-    const purpose = evaluateScenePurpose(narration);
-    const hasValidPurpose = purpose.purposeScore >= 0.3; // Reduced from 0.4 to 0.3
-    const hasNewElements = newElements.length > 0;
-    const hasProgressiveAction = evaluateProgressiveAction(narration, context);
-
-    // Log validation results
-    logger.debug('Story progression validation:', {
-        textSimilarityScore: maxSimilarity,
-        semanticSimilarityPassed: true,
-        newElements,
-        purpose,
-        hasValidPurpose,
-        hasNewElements,
-        hasProgressiveAction
-    });
-
-    // Accept if any of these conditions are met
-    return hasValidPurpose || hasNewElements || hasProgressiveAction;
-}
-
-// New helper function to evaluate if the action progresses the story
-function evaluateProgressiveAction(narration: string, context: GameContext): boolean {
-    const progressiveKeywords = [
-        'reveal', 'discover', 'notice', 'realize', 'understand', 'learn', 'find', 'observe',
-        'revela', 'descobre', 'nota', 'percebe', 'entende', 'aprende', 'encontra', 'observa'
-    ];
-
-    const emotionalKeywords = [
-        'feel', 'worry', 'fear', 'hope', 'trust', 'doubt', 'suspect',
-        'sente', 'preocupa', 'teme', 'espera', 'confia', 'duvida', 'suspeita'
-    ];
-
-    const hasProgressiveAction = progressiveKeywords.some(keyword => 
-        narration.toLowerCase().includes(keyword.toLowerCase())
-    );
-
-    const hasEmotionalDevelopment = emotionalKeywords.some(keyword => 
-        narration.toLowerCase().includes(keyword.toLowerCase())
-    );
-
-    return hasProgressiveAction || hasEmotionalDevelopment;
-}
-
-interface ScenePurpose {
-    hasProgression: boolean;
-    hasConsequence: boolean;
-    hasNewElement: boolean;
-    purposeScore: number;
-}
-
-function evaluateScenePurpose(scene: string): ScenePurpose {
-    // Check for story progression indicators
-    const progressionKeywords = [
-        'reveals', 'discovers', 'realizes', 'understands', 'notices',
-        'revela', 'descobre', 'percebe', 'entende', 'nota'
-    ];
-
-    // Check for consequence indicators
-    const consequenceKeywords = [
-        'because', 'therefore', 'as a result', 'consequently',
-        'porque', 'portanto', 'como resultado', 'consequentemente'
-    ];
-
-    // Check for new element indicators
-    const newElementKeywords = [
-        'new', 'unexpected', 'suddenly', 'mysterious', 'strange',
-        'novo', 'inesperado', 'repentinamente', 'misterioso', 'estranho'
-    ];
-
-    const hasProgression = progressionKeywords.some(keyword => 
-        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
-    );
-
-    const hasConsequence = consequenceKeywords.some(keyword => 
-        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
-    );
-
-    const hasNewElement = newElementKeywords.some(keyword => 
-        new RegExp(`\\b${keyword}\\b`, 'i').test(scene)
-    );
-
-    const purposeScore = (
-        (hasProgression ? 0.4 : 0) +
-        (hasConsequence ? 0.3 : 0) +
-        (hasNewElement ? 0.3 : 0)
-    );
-
-    return {
-        hasProgression,
-        hasConsequence,
-        hasNewElement,
-        purposeScore
-    };
 }

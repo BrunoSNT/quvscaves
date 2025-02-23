@@ -64,25 +64,13 @@ Each section MUST:
 
 RESPONSE FORMAT RULES:
 Every response MUST include these sections in order:
-1. [Narration] - Vivid description of environment and results of player actions
-3. [Available Actions] - List of 3-5 possible actions the character can take based on their actual abilities with 100 characters MAX.
+1. [Narration] - Vivid description of environment and results of player actions. 800 to 1200 characters.
+3. [Available Actions] - List of 3-5 possible actions the character can take based on their actual abilities with 80 characters MAX.
 
 Optional sections if applicable:
 - [Atmosphere] - Current mood, weather, and environmental details
 - [Memory] - Key events or discoveries to remember
 - [Dialogues] - Dialogues of NPCs
-
-Response Format Example:
-{
-    "narration": <NARRATION min 400 characters, max 1000 characters>,
-    "atmosphere": <ATMOSPHERE min 100 characters, max 300 characters>,
-    "dialogues": <DIALOGUES min 100 characters, max 300 characters>,
-    "available_actions": [
-        <ACTION 1>,
-        <ACTION 2>,
-        <ACTION 3>
-    ]
-}
 `,
     contextLabels: {
       scene: 'Current Scene',
@@ -141,25 +129,13 @@ Cada seção DEVE:
 
 REGRAS DE FORMATO DE RESPOSTA:
 Toda resposta DEVEM seguir o formato destas seções em ordem:
-1. [Narração] - Descrição vívida do ambiente e resultados das ações do jogador
-3. [Ações Disponíveis] - Lista de 3-5 ações possíveis para o personagem com 100 caracteres MAXIMO.
+1. [Narração] - Descrição vívida do ambiente e resultados das ações do jogador. 800 a 1200 caracteres.
+3. [Ações Disponíveis] - Lista de 3-5 ações possíveis para o personagem com 80 caracteres MAXIMO.
 
 Seções opcionais quando aplicável:
 - [Memória] - Eventos chave ou descobertas para lembrar
 - [Atmosfera] - Humor atual, clima e detalhes do ambiente
 - [Dialogos] - Dialogos de NPCs
-
-Exemplo de Resposta:
-{
-    "narration": <NARRAÇÃO min 400 caracteres, max 1000 caracteres>,
-    "atmosphere": <ATMOSFERA min 100 caracteres, max 300 caracteres>,
-    "dialogues": <DIÁLOGO min 100 caracteres, max 300 caracteres>,
-    "available_actions": [
-        <OPÇÃO 1>,
-        <OPÇÃO 2>,
-        <OPÇÃO 3>
-    ]
-}
 `,
     contextLabels: {
       scene: 'Cena Atual',
@@ -177,6 +153,43 @@ Exemplo de Resposta:
       magic: 'Nível de Magia'
     }
   }
+};
+
+const combatPrompts = {
+    'en-US': {
+        initiation: `
+COMBAT INITIATION RULES:
+1. Monitor for aggressive actions or clear combat intent
+2. Identify all potential combat participants
+3. Roll initiative for all participants
+4. Establish turn order
+5. Set up initial combat state
+6. Provide appropriate combat actions based on character abilities
+
+COMBAT ACTION TYPES:
+- ATTACK: Basic weapon attacks
+- SPELL: Magical abilities from spellbook
+- ABILITY: Special character abilities
+- ITEM: Use combat items
+- MOVE: Positioning and movement
+- DEFEND: Defensive actions
+
+Each combat turn MUST include:
+1. Current participant's turn
+2. Available combat actions
+3. Environmental factors
+4. Status effects
+5. Position/range considerations`,
+        
+        turnUpdate: `
+TURN PROGRESSION RULES:
+1. Validate action against character capabilities
+2. Process action results
+3. Update combat state
+4. Check for combat end conditions
+5. Prepare next turn's options
+6. Maintain narrative consistency`
+    }
 };
 
 export function getGamePrompt(language: SupportedLanguage) {
@@ -198,10 +211,15 @@ ${labels.tone}: ${context.adventure?.toneStyle}
 ${labels.magic}: ${context.adventure?.magicLevel}
 `;
 
-  // Add memory context
+  // Add memory context with emphasis on recent scenes for continuity
   const memoryContext = context.memory ? `
 Recent Events:
-${context.memory.recentScenes.map(scene => scene.summary).join('\n')}
+${context.memory.recentScenes.map((scene, index) => 
+  `${index + 1}. ${scene.summary}`
+).join('\n')}
+
+Current Scene:
+${context.scene || 'Inside an abandoned castle. A shadowy figure with glowing red eyes was spotted in a dark corridor.'}
 
 Active Quests:
 ${context.memory.activeQuests.map(quest => `- ${quest.title}: ${quest.description}`).join('\n')}
@@ -227,54 +245,77 @@ ${context.combat.participants.map(p => {
     Status Effects: ${p.statusEffects.join(', ') || 'None'}`;
 }).join('\n')}` : '';
 
-  return `
-${styleContext}
-
-${labels.scene}: ${context.scene}
-
-${labels.characters}:
-${context.characters.map(char => {
-  const spells = char.spells?.map(s => `  - ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n') || 'None';
-  const abilities = char.abilities?.map(a => `  - ${a.name}`).join('\n') || 'None';
-  
-  return `- ${char.name} (${char.class})
+  // Add character context
+  const characterContext = context.characters.map(char => {
+    const spells = char.spells?.map(s => `  - ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n') || 'None';
+    const abilities = char.abilities?.map(a => `  - ${a.name}`).join('\n') || 'None';
+    
+    return `- ${char.name} (${char.class})
   Spells:
 ${spells}
   Abilities:
 ${abilities}`;
-}).join('\n\n')}
+  }).join('\n\n');
 
+  // Add current state context
+  const stateContext = `
 ${labels.status}:
 - ${labels.health}: ${context.currentState.health}
 - ${labels.mana}: ${context.currentState.mana}
 - ${labels.inventory}: ${context.currentState.inventory.join(', ') || labels.empty}
-- ${labels.questProgress}: ${context.currentState.questProgress}
+- ${labels.questProgress}: ${context.currentState.questProgress}`;
+
+  // Add recent actions for continuity
+  const recentActions = context.playerActions.length > 0 
+    ? `\n\nRecent Actions:\n${context.playerActions.join('\n')}`
+    : '';
+
+  // Add additional context if any
+  const additionalContext = context.additionalContext?.length
+    ? `\n\nAdditional Context:\n${context.additionalContext.join('\n')}`
+    : '';
+
+  return `
+${styleContext}
+
+${characterContext}
+
+${stateContext}
 
 ${memoryContext}
 
 ${combatContext}
 
-${labels.action}: ${context.playerActions[0]}
+${recentActions}
+
+${additionalContext}
+
+Current Action: ${context.playerActions[0]}
   `.trim();
 }
 
-export function createFallbackResponse(context: GameContext): string {
-  const language = context.language;
+export function createFallbackResponse(language: string): string {
   const isEnglish = language === 'en-US';
   
   logger.warn('Using fallback response for language:', language);
 
-  const sections = isEnglish ? {
-    narration: '[Narration] The path ahead remains unclear, but your determination drives you forward...',
-    atmosphere: '[Atmosphere] A moment of uncertainty hangs in the air as you consider your next move.',
-    suggestions: '[Suggested Choices]\n- Wait and observe your surroundings\n- Proceed with caution\n- Search for alternative paths',
-    effects: '[Effects] You remain alert and ready.'
+  const response = isEnglish ? {
+    narration: 'The path ahead remains unclear, but your determination drives you forward. The situation demands careful consideration of your next move.',
+    atmosphere: 'A moment of uncertainty hangs in the air, creating a tense but contemplative atmosphere.',
+    available_actions: [
+      'Wait and observe your surroundings',
+      'Proceed with caution',
+      'Search for alternative paths'
+    ]
   } : {
-    narration: '[Narração] O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante...',
-    atmosphere: '[Atmosfera] Um momento de incerteza paira no ar enquanto você considera seu próximo movimento.',
-    suggestions: '[Sugestões de Ação]\n- Aguardar e observar seus arredores\n- Prosseguir com cautela\n- Procurar por caminhos alternativos',
-    effects: '[Efeitos] Você permanece alerta e pronto.'
+    narracao: 'O caminho à frente permanece incerto, mas sua determinação o impulsiona adiante. A situação exige consideração cuidadosa do seu próximo movimento.',
+    atmosfera: 'Um momento de incerteza paira no ar, criando uma atmosfera tensa mas contemplativa.',
+    acoes_disponiveis: [
+      'Aguardar e observar seus arredores',
+      'Prosseguir com cautela',
+      'Procurar por caminhos alternativos'
+    ]
   };
 
-  return Object.values(sections).join('\n\n');
+  return JSON.stringify(response);
 } 

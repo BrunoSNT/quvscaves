@@ -29,13 +29,13 @@ if (process.env.NODE_ENV !== 'production') {
 // Log queries in development
 if (process.env.NODE_ENV === 'development') {
     (prisma as any).$on('query', (e: Prisma.QueryEvent) => {
-        logger.debug('RAG Query:' + prettyPrintLog(JSON.stringify({
+        logger.debug('RAG Query:\n' + prettyPrintLog(JSON.stringify({
             timestamp: e.timestamp,
             query: e.query,
             params: e.params,
             duration: e.duration,
             target: e.target
-        })));
+        })) + "\n\n");
     });
 }
 

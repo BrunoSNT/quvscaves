@@ -1,4 +1,4 @@
-import { GameStats, GameSkills, GameInventoryItem, GameEffect } from '../../shared/types/game';
+import { GameStats, GameSkills, GameInventoryItem, GameEffect } from '../../shared/game/types';
 import { AdventurePlayer } from '../adventure/types';
 
 export interface Character {

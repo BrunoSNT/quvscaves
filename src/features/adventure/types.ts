@@ -1,5 +1,5 @@
-import { SupportedLanguage } from 'shared/i18n/types';
-import { WorldStyle, ToneStyle, MagicLevel } from '../../shared/types/game';
+import { SupportedLanguage } from '../../shared/i18n/types';
+import { WorldStyle, ToneStyle, MagicLevel } from '../../shared/game/types';
 import { Character } from '../character/types';
 
 export interface Adventure {

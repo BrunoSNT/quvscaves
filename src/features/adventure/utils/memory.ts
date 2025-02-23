@@ -1,4 +1,4 @@
-import { Memory } from '@prisma/client';
+import { Memory } from '../../../../prisma/client';
 
 interface MemoryScore {
     memory: Memory;

@@ -33,7 +33,7 @@ export interface FormattedResponse {
     action?: string;
     response?: string;
     language?: SupportedLanguage;
-    voiceType?: 'none' | 'discord' | 'elevenlabs' | 'kokoro' | undefined;
+    voiceType?: 'NONE' | 'DISCORD' | 'ELEVENLABS' | 'KOKORO' | undefined;
     guild?: any;
     categoryId?: string;
     adventureId?: string;

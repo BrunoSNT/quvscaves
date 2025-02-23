@@ -11,13 +11,14 @@ import {
 } from 'discord.js';
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import { logger } from '../../../shared/logger';
-import { VoiceType, WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy } from '../../../shared/game/types';
+import { VoiceType, WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy, RollMode } from '../../../shared/game/types';
 import { prisma } from '../../../core/prisma';
 import { createCategoryChannel, createTextChannel, createPlayerChannels } from '../../../shared/discord/channels';
 import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../../features/voice/config/voice';
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { getMessages } from '../../../shared/i18n/translations';
 import { Character } from '../../../../prisma/client';
+import { prettyPrintLog } from '../../../shared/logger';
 
 export async function handleCreateAdventure(interaction: ChatInputCommandInteraction) {
     // Look up the database user based on their Discord ID
@@ -330,7 +331,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
 
             // If Kokoro is selected, show voice options based on language
             let kokoroVoice: string | undefined;
-            if (voiceType === 'kokoro') {
+            if (voiceType === 'KOKORO') {
                 const voiceOptions = [...(KOKORO_VOICES_BY_LANGUAGE[language] || KOKORO_VOICES_BY_LANGUAGE['en-US'])];
 
                 const kokoroVoiceRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
@@ -425,7 +426,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     name: adventureName,
                     status: 'ACTIVE',
                     language,
-                    voiceType,
+                    voiceType: 'KOKORO',
                     privacy,
                     worldStyle,
                     toneStyle,
@@ -559,7 +560,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                             await originalMessage.edit({ components: [] });
                         }
                     } catch (error) {
-                        logger.error('Error executing default action:', error);
+                        logger.error('Error executing default action:\n' + error);
                         await i.editReply({ 
                             content: language === 'pt-BR'
                                 ? 'Erro ao iniciar a aventura. Por favor, tente usar o comando `/action` manualmente.'
@@ -567,7 +568,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                         });
                     }
                 } catch (error) {
-                    logger.error('Error in collector:', error);
+                    logger.error('Error in collector:\n' + error);
                     try {
                         if (i.deferred) {
                             await i.editReply({
@@ -584,7 +585,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                             });
                         }
                     } catch (replyError) {
-                        logger.error('Error sending error message:', replyError);
+                        logger.error('Error sending error message:\n' + replyError);
                     }
                 }
             });
@@ -616,13 +617,13 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
         }
 
     } catch (error) {
-        logger.error('Error creating adventure:', {
+        logger.error('Error creating adventure:\n' + prettyPrintLog(JSON.stringify({
             userId: interaction.user.id,
             error: error instanceof Error ? {
                 message: error.message,
                 stack: error.stack
             } : error
-        });
+        })) + "\n\n");
 
         const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
 
@@ -642,7 +643,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
             }
             logger.info('Error response sent successfully');
         } catch (responseError) {
-            logger.error('Failed to send error response:', responseError);
+            logger.error('Failed to send error response:\n' + responseError);
         }
     }
 }
@@ -669,7 +670,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
         // -- Gather Player/Character Names & validate them --
         const playerNames = interaction.options.getString('players')?.split(',').map(name => name.trim()) || [];
-        logger.debug('Player names:', playerNames);
+        logger.debug('Player names:\n' + playerNames);
 
         const characters = await prisma.character.findMany({
             where: {
@@ -748,7 +749,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     ])
             );
 
-        await interaction.followUp({ content: 'Now, choose your world style:', components: [worldStyleRow] });
+        await interaction.followUp({ content: 'Now, choose your world style:\n' + prettyPrintLog(JSON.stringify({ components: [worldStyleRow] }))});
         const worldStyleInteraction = await setupMsg.awaitMessageComponent({
             filter: i => i.user.id === interaction.user.id,
             time: 300000
@@ -771,7 +772,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     ])
             );
 
-        await interaction.followUp({ content: 'Now, choose your adventure tone:', components: [toneStyleRow] });
+        await interaction.followUp({ content: 'Now, choose your adventure tone:\n' + prettyPrintLog(JSON.stringify({ components: [toneStyleRow] }))});
         const toneStyleInteraction = await setupMsg.awaitMessageComponent({
             filter: i => i.user.id === interaction.user.id,
             time: 300000
@@ -792,7 +793,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     ])
             );
 
-        await interaction.followUp({ content: 'Now, choose the level of magic in your world:', components: [magicLevelRow] });
+        await interaction.followUp({ content: 'Now, choose the level of magic in your world:\n' + prettyPrintLog(JSON.stringify({ components: [magicLevelRow] }))});
         const magicLevelInteraction = await setupMsg.awaitMessageComponent({
             filter: i => i.user.id === interaction.user.id,
             time: 300000
@@ -813,7 +814,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     ])
             );
 
-        await interaction.followUp({ content: 'Now, choose the voice type:', components: [voiceRow] });
+        await interaction.followUp({ content: 'Now, choose the voice type:\n' + prettyPrintLog(JSON.stringify({ components: [voiceRow] }))});
         const voiceInteraction = await setupMsg.awaitMessageComponent({
             filter: i => i.user.id === interaction.user.id,
             time: 300000
@@ -822,7 +823,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
 
         // If Kokoro is selected, offer additional voice options
         let kokoroVoice: string | undefined;
-        if (voiceType === 'kokoro') {
+        if (voiceType === 'KOKORO') {
             const voiceOptions = [...(KOKORO_VOICES_BY_LANGUAGE[language] || KOKORO_VOICES_BY_LANGUAGE['en-US'])];
             const kokoroVoiceRow = new ActionRowBuilder<MessageActionRowComponentBuilder>()
                 .addComponents(
@@ -891,7 +892,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                 name: adventureName,
                 status: 'ACTIVE',
                 language,
-                voiceType,
+                voiceType: 'KOKORO',
                 privacy,
                 worldStyle,
                 toneStyle,
@@ -899,10 +900,27 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                 userId: user.id,
                 categoryId: category.id,
                 textChannelId: textChannel.id,
-                settings: {} // or custom settings if needed
+                settings: {
+                    kokoroVoice
+                },
+                players: {
+                    create: characters.map(char => ({
+                        userId: char.userId,
+                        characterId: char.id,
+                        username: char.name
+                    }))
+                }
+            },
+            include: {
+                players: {
+                    include: {
+                        user: true,
+                        character: true
+                    }
+                }
             }
         });
-        logger.debug('Created adventure:', { adventureId: adventure.id });
+        logger.debug('Created adventure:\n' + prettyPrintLog(JSON.stringify({ adventureId: adventure.id })) + "\n\n");
 
         // Create initial scene memory
         const messages = getMessages(language);
@@ -955,7 +973,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
         return await interaction.editReply(`Adventure created successfully! Check out the channels created for your adventure.`);
 
     } catch (error) {
-        logger.error('Error starting adventure:', error);
+        logger.error('Error starting adventure:\n' + error);
         return await interaction.editReply('An error occurred while starting the adventure');
     }
 } 

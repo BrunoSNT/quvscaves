@@ -14,11 +14,6 @@ export const voiceConfig: Record<VoiceProvider, VoiceProviderConfig> = {
         defaultLanguage: 'en-US',
         defaultSpeed: 1.0
     },
-    DISCORD: {
-        provider: 'DISCORD',
-        defaultLanguage: 'en-US',
-        defaultSpeed: 1.0
-    },
     KOKORO: {
         provider: 'KOKORO',
         defaultLanguage: 'ja-JP',

@@ -3,7 +3,6 @@ import {
     MessageFlags,
     ActionRowBuilder,
     StringSelectMenuBuilder,
-    EmbedBuilder,
     StringSelectMenuInteraction,
     ButtonBuilder,
     Message,
@@ -12,9 +11,6 @@ import {
     TextChannel,
 } from 'discord.js';
 import { DefaultCharacterService } from '../services/character';
-import { logger } from '../../../shared/logger';
-import { translate } from '../../../shared/i18n/translations';
-import { CharacterCreationOptions } from '../types';
 import { prisma } from '../../../core/prisma';
 import { 
     getRacialBonuses, 
@@ -37,11 +33,11 @@ const CLASSES = [
 ];
 
 const RACES = [
+    { name: 'Human', value: 'human'},
     { name: 'Elf', value: 'elf' },
     { name: 'Dwarf', value: 'dwarf' },
     { name: 'Halfling', value: 'halfling' },
     { name: 'Orc', value: 'orc' },
-    { name: 'Dragonborn', value: 'dragonborn' }
 ];
 
 export async function handleCreateCharacter(interaction: ChatInputCommandInteraction) {
@@ -195,14 +191,14 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                     const stats: { [key: string]: number } = {};
                     let confirmed = false;
 
-                    await statsMethodInteraction.update({
+                    let currentMessage = await statsMethodInteraction.update({
                         content: `Rolling stats for **${name}**...\nClick "Roll Next Stat" to roll 4d6 (drop lowest) for ${statsOrder[0].toUpperCase()}\nYou have ${rerollsRemaining} rerolls available.`,
                         components: [rollStatsRow(rerollsRemaining)]
                     });
 
                     while (!confirmed) {
                         while (currentStatIndex < statsOrder.length) {
-                            const rollInteraction = await raceMsg.awaitMessageComponent({
+                            const rollInteraction = await currentMessage.awaitMessageComponent({
                                 filter: i => i.user.id === interaction.user.id,
                                 time: 300000
                             }) as ButtonInteraction;
@@ -223,13 +219,13 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                                 }).join('\n');
 
                                 if (currentStatIndex < statsOrder.length - 1) {
-                                    await rollInteraction.update({
+                                    currentMessage = await rollInteraction.update({
                                         content: `Rolling stats for **${name}**...\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\n\nClick "Roll Next Stat" for ${statsOrder[currentStatIndex + 1].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
                                         components: [rollStatsRow(rerollsRemaining)]
                                     });
                                 } else {
                                     const totalStats = Object.values(stats).reduce((sum, val) => sum + val, 0);
-                                    await rollInteraction.update({
+                                    currentMessage = await rollInteraction.update({
                                         content: `Stats rolled for **${name}**!\n\n${statsDisplay}\n\nLast Roll: ${rollsDisplay}\nTotal: ${totalStats}\n\nWould you like to keep these stats or reroll?`,
                                         components: [confirmationRow(rerollsRemaining)]
                                     });
@@ -238,7 +234,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                             } else if (rollInteraction.customId === 'reroll' && currentStatIndex > 0 && rerollsRemaining > 0) {
                                 currentStatIndex--;
                                 rerollsRemaining--;
-                                await rollInteraction.update({
+                                currentMessage = await rollInteraction.update({
                                     content: `Rolling stats for **${name}**...\nRerolling ${statsOrder[currentStatIndex].toUpperCase()}\nRerolls remaining: ${rerollsRemaining}`,
                                     components: [rollStatsRow(rerollsRemaining)]
                                 });
@@ -246,7 +242,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
                         }
 
                         // Wait for confirmation or further reroll
-                        const confirmInteraction = await raceMsg.awaitMessageComponent({
+                        const confirmInteraction = await currentMessage.awaitMessageComponent({
                             filter: i => i.user.id === interaction.user.id,
                             time: 300000
                         }) as ButtonInteraction;
@@ -569,10 +565,18 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
 
     } catch (error) {
         console.error('Error creating character:', error);
-        await interaction.editReply({
-            content: 'Failed to create character. Please try again.',
-            components: []
-        });
+        if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({
+                content: 'Failed to create character. Please try again.',
+                components: []
+            });
+        } else {
+            await interaction.reply({
+                content: 'Failed to create character. Please try again.',
+                components: [],
+                ephemeral: true
+            });
+        }
     }
 }
 

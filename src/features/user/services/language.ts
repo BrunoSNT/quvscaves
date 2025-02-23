@@ -2,7 +2,7 @@ import { prisma } from '../../../core/prisma';
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { formatLanguageCode, getDefaultLanguage } from '../../../shared/i18n/language';
 import { logger } from '../../../shared/logger';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from 'prisma/client';
 
 export class LanguageService {
     async getUserLanguage(userId: string): Promise<SupportedLanguage> {

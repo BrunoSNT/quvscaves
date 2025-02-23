@@ -153,4 +153,44 @@ export function getRaceSpeed(race: string): number {
   };
   
   return speeds[race.toLowerCase() as Race] || 30;
+}
+
+export function calculateSimilarity(str1: string, str2: string): number {
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) {
+        return 1.0;
+    }
+    
+    const editDistance = levenshteinDistance(longer, shorter);
+    return (1.0 - editDistance / longer.length);
+}
+
+function levenshteinDistance(str1: string, str2: string): number {
+    const matrix: number[][] = [];
+    
+    for (let i = 0; i <= str1.length; i++) {
+        matrix[i] = [i];
+    }
+    
+    for (let j = 0; j <= str2.length; j++) {
+        matrix[0][j] = j;
+    }
+    
+    for (let i = 1; i <= str1.length; i++) {
+        for (let j = 1; j <= str2.length; j++) {
+            if (str1[i-1] === str2[j-1]) {
+                matrix[i][j] = matrix[i-1][j-1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i-1][j-1] + 1,
+                    matrix[i][j-1] + 1,
+                    matrix[i-1][j] + 1
+                );
+            }
+        }
+    }
+    
+    return matrix[str1.length][str2.length];
 } 

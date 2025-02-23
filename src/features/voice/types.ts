@@ -1,12 +1,10 @@
-export type VoiceProvider = 'ELEVENLABS' | 'DISCORD' | 'KOKORO' | 'NONE';
+export type VoiceProvider = 'ELEVENLABS' | 'KOKORO' | 'NONE' | 'DISCORD';
 
 export interface VoiceConfig {
-    provider: 'ELEVENLABS' | 'KOKORO' | 'DISCORD';
-    voiceId?: string;
-    apiKey?: string;
-    speed?: number;
-    ELEVENLABS_API_KEY?: string;
+    provider: VoiceProvider;
     language: string;
+    ELEVENLABS_API_KEY?: string;
+    speed?: number;
 }
 
 export interface VoiceService {

@@ -52,6 +52,8 @@ model Character {
   spells           Json               @default("[]")
   abilities        Json               @default("[]")
   background       String?
+  appearance       String?
+  personality      String?
   strength         Int                @default(10)
   dexterity        Int                @default(10)
   constitution     Int                @default(10)
@@ -92,26 +94,42 @@ model CharacterAbility {
   @@map("character_abilities")
 }
 
+enum VoiceType {
+  NONE
+  DISCORD
+  ELEVENLABS
+  KOKORO
+}
+
+enum RollMode {
+  ACTIVE      // Players must actively roll for skill checks
+  BACKGROUND  // Skill checks are automatically rolled in the background
+}
+
 model Adventure {
-  id            String            @id @default(uuid())
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
-  name          String
-  description   String?
-  status        String            @default("ACTIVE")
-  language      String            @default("en-US")
-  voiceType     String            @default("NONE")
-  privacy       String            @default("public")
-  worldStyle    String            @default("FANTASY")
-  toneStyle     String            @default("CASUAL")
-  magicLevel    String            @default("MEDIUM")
-  categoryId    String?
-  textChannelId String?
-  settings      Json              @default("{}")
-  players       AdventurePlayer[]
-  memories      Memory[]
-  userId        String
-  user          User              @relation(fields: [userId], references: [id])
+  id               String            @id @default(uuid())
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  name             String
+  description      String?
+  status           String            @default("ACTIVE")
+  language         String            @default("en-US")
+  voiceType        VoiceType         @default(NONE)
+  privacy          String            @default("public")
+  worldStyle       String            @default("FANTASY")
+  toneStyle        String            @default("CASUAL")
+  magicLevel       String            @default("MEDIUM")
+  categoryId       String?
+  textChannelId    String?
+  setting          String?
+  rollMode         RollMode          @default(ACTIVE)  // How skill checks should be handled
+  settings         Json              @default("{}")
+  players          AdventurePlayer[]
+  memories         Memory[]
+  userId           String
+  user             User              @relation(fields: [userId], references: [id])
+  episodicMemories EpisodicMemory[]
+  workingMemories  WorkingMemory[]
 
   @@map("adventures")
 }
@@ -163,15 +181,80 @@ model Wallet {
 }
 
 model Memory {
-  id          String   @id @default(uuid())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id          String    @id @default(uuid())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   adventureId String
-  type        String   // 'SCENE' | 'QUEST' | 'CHARACTER' | 'LOCATION' | 'ITEM'
+  type        String // 'SCENE' | 'QUEST' | 'CHARACTER' | 'LOCATION' | 'ITEM'
   title       String
-  description String   @db.Text
-  metadata    Json?    @default("{}")
+  description String    @db.Text
+  metadata    Json?     @default("{}")
   adventure   Adventure @relation(fields: [adventureId], references: [id])
 
   @@map("memories")
+}
+
+model EpisodicMemory {
+  id          String    @id @default(uuid())
+  adventureId String
+  adventure   Adventure @relation(fields: [adventureId], references: [id])
+  type        String // human, assistant
+  content     String    @db.Text
+  metadata    Json      @default("{}")
+  embedding   Json      @default("[]")
+  timestamp   DateTime  @default(now())
+
+  @@map("episodic_memories")
+}
+
+model SemanticMemory {
+  id        String   @id @default(uuid())
+  type      String // knowledge, grounding
+  content   String   @db.Text
+  source    String
+  metadata  Json     @default("{}")
+  embedding Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("semantic_memories")
+}
+
+model ProceduralMemory {
+  id          String   @id @default(uuid())
+  type        String // prompt, tool
+  name        String
+  description String   @db.Text
+  parameters  Json     @default("{}")
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("procedural_memories")
+}
+
+model WorkingMemory {
+  id                String    @id @default(uuid())
+  adventureId       String
+  adventure         Adventure @relation(fields: [adventureId], references: [id])
+  promptStructure   String    @db.Text
+  availableTools    Json      @default("[]")
+  additionalContext Json      @default("[]")
+  reasoningHistory  Json      @default("[]")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@map("working_memories")
+}
+
+model VectorIndex {
+  id         String   @id @default(uuid())
+  memoryId   String
+  memoryType String // episodic, semantic
+  vector     Json     @default("[]")
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("vector_indices")
 }

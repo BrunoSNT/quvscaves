@@ -8,6 +8,7 @@ export interface AdventureSettings {
     setting?: string;
     language: SupportedLanguage;
     useVoice?: boolean;
+    rollMode: RollMode;  // How skill checks should be handled
 }
 
 export interface GameState {
@@ -20,22 +21,28 @@ export interface GameState {
 export interface Memory {
     recentScenes: Array<{
         summary: string;
+        timestamp?: Date;
+        type?: string;
     }>;
     activeQuests: Array<{
         title: string;
         description: string;
+        status?: string;
     }>;
     knownCharacters: Array<{
         title: string;
         description: string;
+        type?: string;
     }>;
     discoveredLocations: Array<{
         title: string;
         description: string;
+        visited?: boolean;
     }>;
     importantItems: Array<{
         title: string;
         description: string;
+        type?: string;
     }>;
 }
 
@@ -67,6 +74,7 @@ export interface Adventure {
     categoryId?: string;
     textChannelId?: string;
     settings: AdventureSettings;
+    rollMode: RollMode;  // Adding rollMode here
     players: any[];
     createdAt: Date;
     updatedAt: Date;
@@ -79,14 +87,34 @@ export interface Adventure {
 
 export interface GameContext {
     adventure?: Adventure;
-    scene: string;
-    characters: Character[];
+    scene?: string;
+    characters: GameCharacter[];
     playerActions: string[];
-    currentState: GameState;
-    language: SupportedLanguage;
+    currentState: {
+        health: number;
+        mana: number;
+        inventory: GameInventoryItem[];
+        questProgress: Record<string, any>;
+    };
+    language: string;
     memory: Memory;
-    combat?: Combat;
-} 
+    additionalContext?: string[];
+    reasoning?: string[];  // Add reasoning array for AI context
+    availableTools?: Array<{ name: string; description: string }>;  // Add availableTools property
+    combat?: CombatState;
+    lastSkillCheck?: {
+        check: SkillCheck;
+        result: {
+            success: boolean;
+            roll: number;
+            total: number;
+            difficulty: number;
+            margin: number;
+            criticalSuccess: boolean;
+            criticalFailure: boolean;
+        };
+    };
+}
 
 export enum WorldStyle {
     FANTASY = 'FANTASY',
@@ -120,7 +148,12 @@ export enum MagicLevel {
     EPIC = 'EPIC'
 }
 
-export type VoiceType = 'none' | 'discord' | 'elevenlabs' | 'kokoro';
+export enum RollMode {
+    ACTIVE = 'ACTIVE',      // Players must actively roll for skill checks
+    BACKGROUND = 'BACKGROUND'  // Skill checks are automatically rolled in the background
+}
+
+export type VoiceType = 'NONE' | 'DISCORD' | 'ELEVENLABS' | 'KOKORO';
 
 export interface GameStats {
     strength: number;
@@ -131,25 +164,15 @@ export interface GameStats {
     charisma: number;
 }
 
-export interface GameSkills {
-    acrobatics: number;
-    arcana: number;
-    athletics: number;
-    deception: number;
-    history: number;
-    insight: number;
-    intimidation: number;
-    investigation: number;
-    medicine: number;
-    nature: number;
-    perception: number;
-    performance: number;
-    persuasion: number;
-    religion: number;
-    sleightOfHand: number;
-    stealth: number;
-    survival: number;
-}
+export type GameSkills = {
+    strength: number;
+    dexterity: number;
+    constitution: number;
+    intelligence: number;
+    wisdom: number;
+    charisma: number;
+    [key: string]: number; // Allow for custom skills
+};
 
 export interface GameInventoryItem {
     id: string;
@@ -158,6 +181,33 @@ export interface GameInventoryItem {
     quantity: number;
     type: 'WEAPON' | 'ARMOR' | 'CONSUMABLE' | 'QUEST' | 'MISC';
     properties?: Record<string, any>;
+}
+
+export interface GameReward {
+    type: 'ITEM' | 'EXPERIENCE' | 'SPELL' | 'ABILITY' | 'GOLD';
+    message: string;
+    items?: GameInventoryItem[];
+    experience?: number;
+    spell?: {
+        name: string;
+        level: number;
+        school: string;
+        description: string;
+    };
+    ability?: {
+        name: string;
+        type: string;
+        description: string;
+        uses?: number;
+        recharge?: string;
+    };
+    gold?: number;
+}
+
+export interface GameLoot {
+    source: 'CHEST' | 'NPC' | 'QUEST' | 'COMBAT';
+    rewards: GameReward[];
+    description: string;
 }
 
 export interface GameEffect {
@@ -169,4 +219,72 @@ export interface GameEffect {
     properties?: Record<string, any>;
 }
 
-export type AdventurePrivacy = 'public' | 'friends_only' | 'private'; 
+export type AdventurePrivacy = 'public' | 'friends_only' | 'private';
+
+export enum ActionType {
+    NARRATIVE = 'NARRATIVE',   // Story progression, exploration, dialogue
+    COMBAT = 'COMBAT',        // Combat initiation or combat actions
+    QUESTION = 'QUESTION'     // Actions that request more information
+}
+
+export interface GameAction {
+    type: ActionType;
+    text: string;
+    metadata?: {
+        combatIntent?: boolean;
+        targetId?: string;
+        abilityId?: string;
+        itemId?: string;
+    };
+}
+
+export interface CombatAction {
+    type: 'ATTACK' | 'SPELL' | 'ABILITY' | 'ITEM' | 'MOVE' | 'DEFEND';
+    targetId?: string;
+    abilityId?: string;
+    itemId?: string;
+    description: string;
+}
+
+export interface CombatState extends Combat {
+    status: 'ACTIVE' | 'PENDING' | 'COMPLETE';
+    turnOrder: string[];
+    availableActions: CombatAction[];
+    lastAction?: CombatAction;
+    roundHistory: Array<{
+        round: number;
+        actions: CombatAction[];
+    }>;
+}
+
+export interface CombatDetectionResult {
+    isCombat: boolean;
+    participants?: string[];
+    triggerAction?: string;
+}
+
+export type GameCharacter = Character & {
+    stats: {
+        wisdom: number;
+        charisma: number;
+        strength: number;
+        dexterity: number;
+        constitution: number;
+        intelligence: number;
+    };
+    skills: string[];
+    inventory: GameInventoryItem[];
+    effects: string[];
+    proficiencies: string[];
+    languages: string[];
+    spells: string[];
+    abilities: string[];
+};
+
+export interface SkillCheck {
+    skill: string;
+    difficulty: number;
+    advantage: boolean;
+    disadvantage: boolean;
+    modifiers?: Record<string, number>;
+} 

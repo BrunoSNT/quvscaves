@@ -24,7 +24,7 @@ export class TTSService {
 
     private async elevenLabsGenerate(text: string, voiceConfig: VoiceConfig): Promise<Buffer> {
         const response = await axios.post(
-            `https://api.elevenlabs.io/v1/text-to-speech/${voiceConfig.voiceId}`,
+            `https://api.elevenlabs.io/v1/text-to-speech/12345`,
             {
                 text,
                 voice_settings: {
@@ -35,7 +35,7 @@ export class TTSService {
             },
             {
                 headers: {
-                    'xi-api-key': voiceConfig.apiKey || config.ELEVENLABS_API_KEY,
+                    'xi-api-key': voiceConfig.ELEVENLABS_API_KEY || config.ELEVENLABS_API_KEY,
                     'Content-Type': 'application/json',
                     'Accept': 'audio/mpeg'
                 },

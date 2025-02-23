@@ -1,19 +1,215 @@
-import { ChatInputCommandInteraction, ButtonStyle, MessageFlags, VoiceChannel, ChannelType, BaseGuildVoiceChannel, GuildVoiceChannelResolvable } from 'discord.js';
+import { ChatInputCommandInteraction, ButtonStyle, MessageFlags, VoiceChannel, ChannelType, BaseGuildVoiceChannel, GuildVoiceChannelResolvable, MessageComponentInteraction } from 'discord.js';
 import { AdventureService } from '../services/adventure';
 import { logger, prettyPrintLog } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
-import { generateResponse } from '../../../ai/gamemaster';
+import { GameMaster } from '../../../ai/gamemaster';
 import { prisma } from '../../../core/prisma';
 import { VoiceConfig } from '../../voice/types';
 import { getVoiceService } from '../../voice/services';
-import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnection } from '@discordjs/voice';
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnection, VoiceConnectionStatus } from '@discordjs/voice';
 import { Readable } from 'stream';
 import { GameContext } from '../../../shared/game/types';
 import { Adventure } from '../types';
 import chalk from 'chalk';
-import { MemoryService } from '../services/memory';
+import { ActionType, GameAction } from '../../../shared/game/types';
+import { v4 as uuidv4 } from 'uuid';
+import { Orchestrator } from '../../../ai/orchestrator';
+import { SkillCheck, formatSkillCheckResult } from '../../../shared/game/skills';
+import { entersState } from '@discordjs/voice';
+import { StreamType } from '@discordjs/voice';
+import { VectorStore } from '../../../core/vector/store';
+import { DefaultCharacterService } from '../../character/services/character';
+import { GameReward } from '../../../shared/game/types';
+import { ContextManager } from '../../../shared/game/context';
 
 const adventureService = new AdventureService();
+const activeConnections = new Map<string, VoiceConnection>();
+
+const ACTION_CONCEPTS = {
+    "en-US": {
+        "combat": {
+            concepts: ["fight", "attack", "battle", "weapon", "sword", "hit", "kill", "defend", "strike", "combat", "slash", "block", "parry", "dodge", "shield"],
+            emoji: "⚔️"
+        },
+        "movement": {
+            concepts: ["walk", "run", "jump", "climb", "move", "travel", "go", "enter", "leave", "escape", "sprint", "dash", "crawl", "swim", "fly"],
+            emoji: "🏃"
+        },
+        "interaction": {
+            concepts: ["talk", "speak", "ask", "tell", "chat", "communicate", "discuss", "conversation", "dialogue", "greet", "respond", "answer", "reply", "shout"],
+            emoji: "💬"
+        },
+        "observation": {
+            concepts: ["look", "watch", "observe", "examine", "inspect", "search", "investigate", "study", "analyze", "scan", "spot", "notice", "detect", "find"],
+            emoji: "👀"
+        },
+        "item": {
+            concepts: ["pick", "take", "grab", "use", "hold", "carry", "item", "object", "tool", "equipment", "weapon", "potion", "scroll", "inventory", "bag"],
+            emoji: "🎒"
+        },
+        "magic": {
+            concepts: ["cast", "spell", "magic", "enchant", "ritual", "mystic", "arcane", "magical", "power", "sorcery", "wizardry", "conjure", "summon", "charm"],
+            emoji: "✨"
+        },
+        "stealth": {
+            concepts: ["hide", "sneak", "stealth", "quiet", "silent", "careful", "cautious", "secretive", "lurk", "prowl", "shadow", "conceal", "disguise"],
+            emoji: "🥷"
+        },
+        "social": {
+            concepts: ["persuade", "convince", "charm", "negotiate", "diplomatic", "social", "friendly", "intimidate", "deceive", "bluff", "lie", "threaten"],
+            emoji: "🤝"
+        },
+        "skill": {
+            concepts: ["craft", "create", "make", "build", "skill", "ability", "expertise", "proficiency", "knowledge", "learn", "practice", "train", "improve"],
+            emoji: "🛠️"
+        },
+        "rest": {
+            concepts: ["sleep", "rest", "wait", "pause", "relax", "recover", "heal", "restore", "meditate", "camp", "break", "sit", "lay", "nap"],
+            emoji: "💤"
+        },
+        "exploration": {
+            concepts: ["explore", "discover", "map", "scout", "survey", "wander", "venture", "trek", "journey", "navigate", "chart", "roam", "patrol"],
+            emoji: "🗺️"
+        },
+        "trade": {
+            concepts: ["buy", "sell", "trade", "barter", "haggle", "shop", "purchase", "deal", "merchant", "market", "price", "coin", "gold", "payment"],
+            emoji: "💰"
+        }
+    },
+    "pt-BR": {
+        "combat": {
+            concepts: ["lutar", "atacar", "batalhar", "arma", "espada", "golpear", "matar", "defender", "combater", "bloquear", "aparar", "esquivar", "escudo"],
+            emoji: "⚔️"
+        },
+        "movement": {
+            concepts: ["andar", "correr", "pular", "escalar", "mover", "viajar", "ir", "entrar", "sair", "escapar", "disparar", "rastejar", "nadar", "voar"],
+            emoji: "🏃"
+        },
+        "interaction": {
+            concepts: ["falar", "conversar", "perguntar", "dizer", "comunicar", "discutir", "dialogar", "cumprimentar", "responder", "gritar", "chamar"],
+            emoji: "💬"
+        },
+        "observation": {
+            concepts: ["olhar", "observar", "examinar", "inspecionar", "procurar", "investigar", "estudar", "analisar", "escanear", "notar", "detectar", "encontrar"],
+            emoji: "👀"
+        },
+        "item": {
+            concepts: ["pegar", "apanhar", "agarrar", "usar", "segurar", "carregar", "item", "objeto", "ferramenta", "equipamento", "poção", "pergaminho", "inventário"],
+            emoji: "🎒"
+        },
+        "magic": {
+            concepts: ["conjurar", "feitiço", "magia", "encantar", "ritual", "místico", "arcano", "mágico", "poder", "feitiçaria", "bruxaria", "invocar", "encantar"],
+            emoji: "✨"
+        },
+        "stealth": {
+            concepts: ["esconder", "esgueirar", "furtivo", "quieto", "silencioso", "cuidadoso", "cauteloso", "secreto", "ocultar", "disfarçar", "camuflar"],
+            emoji: "🥷"
+        },
+        "social": {
+            concepts: ["persuadir", "convencer", "encantar", "negociar", "diplomático", "social", "amigável", "intimidar", "enganar", "blefar", "mentir", "ameaçar"],
+            emoji: "🤝"
+        },
+        "skill": {
+            concepts: ["criar", "construir", "fazer", "habilidade", "perícia", "especialidade", "proficiência", "conhecimento", "aprender", "praticar", "treinar"],
+            emoji: "🛠️"
+        },
+        "rest": {
+            concepts: ["dormir", "descansar", "esperar", "pausar", "relaxar", "recuperar", "curar", "restaurar", "meditar", "acampar", "sentar", "deitar"],
+            emoji: "💤"
+        },
+        "exploration": {
+            concepts: ["explorar", "descobrir", "mapear", "vigiar", "vagar", "aventurar", "jornada", "navegar", "cartografar", "patrulhar", "reconhecer"],
+            emoji: "🗺️"
+        },
+        "trade": {
+            concepts: ["comprar", "vender", "trocar", "barganhar", "pechinchar", "comerciar", "negociar", "mercador", "mercado", "preço", "moeda", "ouro"],
+            emoji: "💰"
+        }
+    }
+};
+
+const ABILITY_SKILLS = {
+    "en-US": {
+        "strength": {
+            name: "Strength",
+            concepts: ["athletics", "lifting", "carrying", "physical power", "muscular", "brute force", "raw power", "might"],
+            skills: ["athletics"]
+        },
+        "dexterity": {
+            name: "Dexterity",
+            concepts: ["acrobatics", "stealth", "sleight of hand", "agility", "balance", "coordination", "reflexes", "finesse"],
+            skills: ["acrobatics", "stealth", "sleight_of_hand"]
+        },
+        "constitution": {
+            name: "Constitution",
+            concepts: ["endurance", "stamina", "vitality", "health", "toughness", "resilience", "fortitude"],
+            skills: ["concentration"]
+        },
+        "intelligence": {
+            name: "Intelligence",
+            concepts: ["arcana", "history", "investigation", "nature", "knowledge", "logic", "memory", "reasoning", "study"],
+            skills: ["arcana", "history", "investigation", "nature"]
+        },
+        "wisdom": {
+            name: "Wisdom",
+            concepts: ["animal handling", "insight", "medicine", "perception", "survival", "intuition", "awareness", "spirituality", "religion"],
+            skills: ["animal_handling", "insight", "medicine", "perception", "survival", "religion"]
+        },
+        "charisma": {
+            name: "Charisma",
+            concepts: ["deception", "intimidation", "performance", "persuasion", "social", "leadership", "personality", "presence"],
+            skills: ["deception", "intimidation", "performance", "persuasion"]
+        }
+    },
+    "pt-BR": {
+        "strength": {
+            name: "Força",
+            concepts: ["atletismo", "levantar", "carregar", "poder físico", "muscular", "força bruta", "poder"],
+            skills: ["athletics"]
+        },
+        "dexterity": {
+            name: "Destreza",
+            concepts: ["acrobacia", "furtividade", "prestidigitação", "agilidade", "equilíbrio", "coordenação", "reflexos"],
+            skills: ["acrobatics", "stealth", "sleight_of_hand"]
+        },
+        "constitution": {
+            name: "Constituição",
+            concepts: ["resistência", "vigor", "vitalidade", "saúde", "tenacidade", "resiliência", "fortitude"],
+            skills: ["concentration"]
+        },
+        "intelligence": {
+            name: "Inteligência",
+            concepts: ["arcana", "história", "investigação", "natureza", "conhecimento", "lógica", "memória", "raciocínio", "estudo"],
+            skills: ["arcana", "history", "investigation", "nature"]
+        },
+        "wisdom": {
+            name: "Sabedoria",
+            concepts: ["adestrar animais", "intuição", "medicina", "percepção", "sobrevivência", "intuição", "consciência", "espiritualidade", "religião"],
+            skills: ["animal_handling", "insight", "medicine", "perception", "survival", "religion"]
+        },
+        "charisma": {
+            name: "Carisma",
+            concepts: ["enganação", "intimidação", "atuação", "persuasão", "social", "liderança", "personalidade", "presença"],
+            skills: ["deception", "intimidation", "performance", "persuasion"]
+        }
+    }
+};
+
+const EMOJI_MAP: Record<string, string> = {
+    "combat": "⚔️",
+    "movement": "🏃",
+    "dialogue": "💬",
+    "question": "❓",
+    "observation": "👀",
+    "item": "🎒",
+    "magic": "✨",
+    "stealth": "🥷",
+    "diplomacy": "🤝",
+    "skill": "🛠️",
+    "rest": "💤",
+    "search": "🔍",
+    "default": "➡️",
+};
 
 function splitIntoSentences(text: string): string[] {
     // Split on periods, exclamation marks, or question marks followed by spaces or end of string
@@ -32,6 +228,12 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
             adapterCreator: (channel as VoiceChannel).guild.voiceAdapterCreator,
             selfDeaf: false,
             selfMute: false
+        });
+
+        // Wait for connection to be ready
+        await new Promise((resolve) => {
+            connection.on(VoiceConnectionStatus.Ready, resolve);
+            setTimeout(resolve, 5000); // Timeout after 5 seconds
         });
 
         const player = createAudioPlayer();
@@ -134,15 +336,32 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
                 playNextSentence();
             } else {
                 finishedResolveFn?.();
+                connection.destroy();
             }
         });
 
-        player.on('error', (error) => {
-            logger.error('Error in audio player:', error);
+        player.on('error', (error:any) => {
+            logger.error('Error in audio player:\n' + error);
             if (!hasStartedPlaying) {
                 startedPlayingRejectFn?.(error);
             }
             finishedRejectFn?.(error);
+            connection.destroy();
+        });
+
+        // Handle connection state changes
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            try {
+                await Promise.race([
+                    entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                    entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                ]);
+                // Seems to be reconnecting to a new channel - ignore disconnect
+            } catch (error) {
+                // Seems to be a real disconnect which SHOULDN'T be recovered from
+                connection.destroy();
+                finishedResolveFn?.();
+            }
         });
 
         // Start playing the first sentence
@@ -150,227 +369,653 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
 
         return { startedPlaying, finished };
     } catch (error) {
-        logger.error('Error in playNarration:', error);
+        logger.error('Error in playNarration:\n' + error);
         throw error;
+    }
+}
+
+function createRollButton(skillCheck: SkillCheck) {
+    const buttonId = `roll_${skillCheck.skill}_${skillCheck.difficulty}_${skillCheck.advantage ? '1' : '0'}_${skillCheck.disadvantage ? '1' : '0'}_${uuidv4()}`;
+    return {
+        type: 2,
+        style: ButtonStyle.Primary,
+        label: `Roll ${skillCheck.skill.charAt(0).toUpperCase() + skillCheck.skill.slice(1)} Check (DC ${skillCheck.difficulty})`,
+        custom_id: buttonId
+    };
+}
+
+async function getAbilityForSkill(skill: string, language: string = 'en-US'): Promise<string> {
+    try {
+        const vectorStore = VectorStore.getInstance();
+        let highestSimilarity = -1;
+        let bestAbility = "wisdom"; // Default to wisdom if no match found
+
+        // Get ability scores for the current language
+        const abilityScores = ABILITY_SKILLS[language as keyof typeof ABILITY_SKILLS] || ABILITY_SKILLS['en-US'];
+
+        // First try direct match with skills arrays
+        for (const [ability, data] of Object.entries(abilityScores)) {
+            if (data.skills.includes(skill.toLowerCase())) {
+                return ability;
+            }
+        }
+
+        // If no direct match, use vector similarity with concepts
+        for (const [ability, data] of Object.entries(abilityScores)) {
+            const { similarity } = await vectorStore.compareWithConcepts(skill, data.concepts);
+            if (similarity > highestSimilarity) {
+                highestSimilarity = similarity;
+                bestAbility = ability;
+            }
+        }
+
+        return bestAbility;
+    } catch (error) {
+        logger.error('Error getting ability for skill:', error);
+        return "wisdom"; // Default to wisdom on error
+    }
+}
+
+async function handleRollAction(interaction: any, character?: any, language: string = 'en-US') {
+    try {
+        // Check if interaction needs to be deferred
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply();
+        }
+
+        // Extract skill check data from button ID
+        const [_, skill, difficultyStr, advantageStr, disadvantageStr] = interaction.customId.split('_');
+        const difficulty = parseInt(difficultyStr);
+        const advantage = advantageStr === '1';
+        const disadvantage = disadvantageStr === '1';
+
+        const skillCheck: SkillCheck = {
+            skill,
+            difficulty,
+            advantage,
+            disadvantage
+        };
+
+        // If no character was passed, try to fetch it
+        if (!character) {
+            const adventure = await prisma.adventure.findFirst({
+                where: {
+                    players: {
+                        some: {
+                            userId: interaction.user.id
+                        }
+                    }
+                },
+                include: {
+                    players: {
+                        include: {
+                            character: true
+                        }
+                    }
+                }
+            });
+
+            if (!adventure || !adventure.players[0]?.character) {
+                await interaction.editReply({
+                    content: language === 'en-US'
+                        ? 'Error: Character not found'
+                        : 'Erro: Personagem não encontrado',
+                    components: []
+                });
+                return null;
+            }
+
+            character = adventure.players[0].character;
+            language = adventure.language || 'en-US';
+        }
+
+        // Get the corresponding ability score for this skill
+        const ability = await getAbilityForSkill(skill, language);
+        
+        // Get ability modifier from character stats
+        const abilityModifier = character.stats && character.stats[ability as keyof typeof character.stats]
+            ? Math.floor((character.stats[ability as keyof typeof character.stats] - 10) / 2)
+            : 0;
+
+        // Roll the check
+        const roll = Math.floor(Math.random() * 20) + 1; // 1d20
+        let total = roll + abilityModifier;
+
+        // Apply advantage/disadvantage
+        if (advantage) {
+            const secondRoll = Math.floor(Math.random() * 20) + 1;
+            total = Math.max(total, secondRoll + abilityModifier);
+        } else if (disadvantage) {
+            const secondRoll = Math.floor(Math.random() * 20) + 1;
+            total = Math.min(total, secondRoll + abilityModifier);
+        }
+
+        // Apply modifiers
+        if (skillCheck.modifiers) {
+            total += Object.values(skillCheck.modifiers).reduce((sum, mod) => sum + (mod || 0), 0);
+        }
+
+        const result = {
+            success: total >= skillCheck.difficulty,
+            roll: roll,
+            total: total,
+            difficulty: skillCheck.difficulty,
+            margin: total - skillCheck.difficulty,
+            criticalSuccess: roll === 20,
+            criticalFailure: roll === 1
+        };
+
+        // Get ability name in correct language
+        const abilityData = ABILITY_SKILLS[language as keyof typeof ABILITY_SKILLS]?.[ability as keyof (typeof ABILITY_SKILLS)['en-US']];
+        const abilityName = abilityData?.name || ability;
+
+        // Format roll result message with embed
+        try {
+            await interaction.editReply({
+                embeds: [{
+                    title: language === 'en-US' 
+                        ? `🎲 ${character.name}'s ${skill} Check`
+                        : `🎲 Teste de ${skill} de ${character.name}`,
+                    description: language === 'en-US'
+                        ? `Using ${abilityName} (${abilityModifier >= 0 ? '+' : ''}${abilityModifier})`
+                        : `Usando ${abilityName} (${abilityModifier >= 0 ? '+' : ''}${abilityModifier})`,
+                    fields: [
+                        {
+                            name: language === 'en-US' ? 'Roll' : 'Rolagem',
+                            value: `${roll}${result.criticalSuccess ? ' (Critical Success!)' : result.criticalFailure ? ' (Critical Failure!)' : ''}`,
+                            inline: true
+                        },
+                        {
+                            name: language === 'en-US' ? 'Total' : 'Total',
+                            value: `${total}`,
+                            inline: true
+                        },
+                        {
+                            name: 'DC/CD',
+                            value: `${difficulty}`,
+                            inline: true
+                        },
+                        {
+                            name: language === 'en-US' ? 'Result' : 'Resultado',
+                            value: result.success 
+                                ? `✅ ${language === 'en-US' ? 'Success' : 'Sucesso'} (${language === 'en-US' ? 'by' : 'por'} ${Math.abs(result.margin)})`
+                                : `❌ ${language === 'en-US' ? 'Failure' : 'Falha'} (${language === 'en-US' ? 'by' : 'por'} ${Math.abs(result.margin)})`,
+                            inline: false
+                        }
+                    ],
+                    color: result.success ? 0x00ff00 : 0xff0000
+                }],
+                components: []
+            });
+        } catch (replyError) {
+            logger.error('Error sending roll result:', replyError);
+            // Don't throw here - we still want to return the result
+        }
+
+        return result;
+    } catch (error) {
+        logger.error('Error in handleRollAction:', error);
+        return null;
     }
 }
 
 async function handleActionResponse(interaction: ChatInputCommandInteraction | any, context: GameContext, action: string) {
     try {
-        // First, display the user's action in a new message
-        const channel = interaction.channel;
-        let actionMessage;
-        try {
-            actionMessage = await channel.send({
-                embeds: [{
-                    title: `🎭 ${context.characters[0].name.charAt(0).toUpperCase() + context.characters[0].name.slice(1)} action`,
-                    description: action,
-                    color: 0x3498db,
-                }]
-            });
-        } catch (error) {
-            logger.error('Error sending action message:', error);
-            // Continue execution even if action message fails
+        // Verify character exists before proceeding
+        const character = context.characters[0];
+        if (!character) {
+            throw new Error('Character not found');
         }
 
-        const response = await generateResponse(context);
+        // Initialize context manager
+        const contextManager = new ContextManager(context);
+
+        // Log the initial action request
+        logger.debug('Processing action request:\n' + prettyPrintLog(JSON.stringify({
+            action,
+            userId: interaction.user.id,
+            channelId: interaction.channel.id,
+            adventureId: context.adventure?.id,
+            language: context.language,
+            characterName: character.name
+        })) + "\n\n");
+
+        // 1. First, display the user's action in a new message
+        const channel = interaction.channel;
+        const actionMessage = await channel.send({
+            embeds: [{
+                title: `🎭 ${character.name.charAt(0).toUpperCase() + character.name.slice(1)} action`,
+                description: action,
+                color: 0x3498db,
+            }]
+        });
+
+        // 2. Check for combat intent
+        const gameMaster = new GameMaster(context.adventure?.id || '');
+        const combatResult = await gameMaster.detectCombatIntent(action, context);
+        
+        if (combatResult.isCombat) {
+            // Initialize combat if not already in combat
+            if (!context.combat) {
+                context.combat = await gameMaster.initializeCombat(context, combatResult);
+                await channel.send({
+                    content: context.language === 'en-US'
+                        ? '⚔️ **Combat Initiated!**\nRolling initiative...'
+                        : '⚔️ **Combate Iniciado!**\nRolando iniciativa...'
+                });
+            }
+        }
+
+        // 3. Check if action requires a skill check - do this ONCE
+        const skillCheck = await gameMaster.determineSkillCheck(action, context);
+        let skillCheckResult = null;
+
+        if (skillCheck) {
+            // Get rollMode from either adventure.rollMode or adventure.settings.rollMode
+            const rollMode = context.adventure?.rollMode || context.adventure?.settings.rollMode;
+            if (rollMode === 'ACTIVE') {
+                // Active rolling mode - create roll button and wait for interaction
+                const rollButton = createRollButton(skillCheck);
+                const rollMessage = await channel.send({
+                    content: context.language === 'en-US'
+                        ? `⚠️ **This action requires a ${skillCheck.skill} check!**\n👉 Click the button below to roll.`
+                        : `⚠️ **Esta ação requer um teste de ${skillCheck.skill}!**\n👉 Clique no botão abaixo para rolar.`,
+                    components: [{
+                        type: 1,
+                        components: [rollButton]
+                    }]
+                });
+
+                try {
+                    const rollInteraction = await rollMessage.awaitMessageComponent({
+                        filter: (i: MessageComponentInteraction) => {
+                            return i.customId === rollButton.custom_id && i.user.id === interaction.user.id;
+                        },
+                        time: 600000 // 10 minutes
+                    });
+
+                    skillCheckResult = await handleRollAction(rollInteraction, character, context.language);
+                    
+                    if (!skillCheckResult) {
+                        return;
+                    }
+
+                    // Add skill check result to context
+                    contextManager.addSkillCheckResult(
+                        skillCheckResult.success,
+                        skillCheckResult.margin,
+                        skillCheckResult.criticalSuccess,
+                        skillCheckResult.criticalFailure
+                    );
+                } catch (error) {
+                    logger.error('Error waiting for roll interaction:', error);
+                    await rollMessage.edit({
+                        content: context.language === 'en-US'
+                            ? '❌ Roll timed out after 10 minutes. Please try your action again.'
+                            : '❌ Tempo esgotado após 10 minutos. Por favor, tente sua ação novamente.',
+                        components: []
+                    });
+                    return;
+                }
+            } else {
+                // Background rolling mode - automatically roll
+                const mockInteraction = {
+                    customId: `roll_${skillCheck.skill}_${skillCheck.difficulty}_${skillCheck.advantage ? '1' : '0'}_${skillCheck.disadvantage ? '1' : '0'}_${uuidv4()}`,
+                    deferred: true,
+                    editReply: async (msg: any) => {
+                        await channel.send(msg);
+                    }
+                };
+                
+                skillCheckResult = await handleRollAction(mockInteraction, character, context.language);
+                
+                if (!skillCheckResult) {
+                    return;
+                }
+
+                // Add skill check result to context
+                contextManager.addSkillCheckResult(
+                    skillCheckResult.success,
+                    skillCheckResult.margin,
+                    skillCheckResult.criticalSuccess,
+                    skillCheckResult.criticalFailure
+                );
+            }
+        }
+
+        // Store the skill check result in context for the AI to use
+        if (skillCheckResult && skillCheck) {
+            context.lastSkillCheck = {
+                check: skillCheck,
+                result: skillCheckResult
+            };
+        }
+
+        // NEW: Check for potential rewards before AI response
+        const potentialRewards = await gameMaster.determineRewards(action, context);
+        
+        // 4. Generate AI response - now with access to skill check result via context
+        const response = await gameMaster.generateResponse(context);
+        
         if (!response || typeof response !== 'string') {
+            logger.error('Invalid AI response format:\n' + prettyPrintLog(JSON.stringify({ response })) + "\n\n");
             throw new Error('Invalid AI response format');
         }
 
+        // 5. Parse and validate the response
         let parsedResponse;
         try {
             parsedResponse = JSON.parse(response);
-        } catch (parseError) {
-            logger.error('Failed to parse AI response:', parseError);
-            throw new Error('Invalid JSON response from AI');
-        }
+            logger.debug('Successfully parsed AI response:\n' + prettyPrintLog(JSON.stringify({ parsedResponse })) + "\n\n");
 
-        const narrationText = context.language === 'en-US' 
-            ? parsedResponse.narration
-            : parsedResponse.narracao;
-        
-        const atmosphereText = context.language === 'en-US'
-            ? parsedResponse.atmosphere
-            : parsedResponse.atmosfera;
-
-        let formattedResponse = context.language === 'en-US' 
-            ? `📖 **Narration**\n${parsedResponse.narration}\n${parsedResponse.atmosphere ? `\n🌍 **Atmosphere**\n${parsedResponse.atmosphere}` : ''}\n\n⚡ **Fast Actions**\n${parsedResponse.available_actions.map((a: string) => `• ${a}`).join('\n')}\n`
-            : `📖 **Narração**\n${parsedResponse.narracao}\n${parsedResponse.atmosfera ? `\n🌍 **Atmosfera**\n${parsedResponse.atmosfera}` : ''}\n\n⚡ **Ações Rápidas**\n${parsedResponse.acoes_disponiveis.map((a: string) => `• ${a}`).join('\n')}\n`;
-
-        // Create a new scene memory
-        if (context.adventure?.id) {
-            try {
-                // Analyze action and response for metadata
-                const metadata = {
-                    action,
-                    selectedAction: action,
-                    availableActions: context.language === 'en-US' 
-                        ? parsedResponse.available_actions 
-                        : parsedResponse.acoes_disponiveis,
-                    atmosphere: atmosphereText || '',
-                    timestamp: new Date().toISOString(),
-                    // Add flags for different types of content
-                    combat: action.toLowerCase().includes('atac') || 
-                           action.toLowerCase().includes('luta') ||
-                           action.toLowerCase().includes('combat'),
-                    discovery: action.toLowerCase().includes('explor') || 
-                             action.toLowerCase().includes('procur') ||
-                             action.toLowerCase().includes('investig'),
-                    interaction: action.toLowerCase().includes('fala') || 
-                               action.toLowerCase().includes('conversa') ||
-                               action.toLowerCase().includes('pergunt'),
-                    quest_related: context.memory.activeQuests.some(quest => 
-                        action.toLowerCase().includes(quest.title.toLowerCase())
-                    ),
-                    key_item: context.memory.importantItems.some(item =>
-                        action.toLowerCase().includes(item.title.toLowerCase())
-                    )
-                };
-
-                const memoryService = new MemoryService();
-                await memoryService.createMemory(
-                    context.adventure.id,
-                    `Scene: ${action.substring(0, 50)}...`,
-                    narrationText,
-                    'SCENE',
-                    metadata
-                );
-
-                logger.info(`Created scene memory and visualization for action: ${action}`);
-            } catch (memoryError) {
-                logger.error('Error creating scene memory:', memoryError);
-                // Continue execution even if memory creation fails
+            // Merge AI-determined rewards with our system-determined rewards
+            if (potentialRewards?.length) {
+                parsedResponse.rewards = [
+                    ...(parsedResponse.rewards || []),
+                    ...potentialRewards
+                ];
             }
-        }
 
-        const footerText = context.language === 'en-US'
-            ? `💭 *Use /action for custom actions*`
-            : `💭 *Use /action para ações personalizadas*`;
+            // Process rewards if present
+            if (parsedResponse.rewards?.length) {
+                const characterService = new DefaultCharacterService();
+                await characterService.addRewardsToCharacter(character.id, parsedResponse.rewards);
 
-        const suggestedActions = context.language === 'en-US'
-            ? parsedResponse.available_actions
-            : parsedResponse.acoes_disponiveis;
+                // Add rewards to context
+                parsedResponse.rewards.forEach((reward: GameReward) => {
+                    contextManager.addReward(reward);
+                });
+            }
 
-        // Handle voice if enabled
-        let voicePromises = { startedPlaying: Promise.resolve(), finished: Promise.resolve() };
-        if (context.adventure?.voiceType !== 'NONE' && interaction.guild && context.adventure?.categoryId) {
-            const category = interaction.guild.channels.cache.get(context.adventure.categoryId);
-            if (category?.type === ChannelType.GuildCategory) {
-                const voiceChannel = category.children.cache.find(
-                    (channel: { name: string; type: ChannelType; }) => channel.name.toLowerCase() === 'table' && 
-                    channel.type === ChannelType.GuildVoice
-                ) as VoiceChannel;
+            // Check for loot from containers or NPCs
+            if (parsedResponse.loot) {
+                const characterService = new DefaultCharacterService();
+                await characterService.addRewardsToCharacter(character.id, parsedResponse.loot.rewards);
 
-                if (voiceChannel) {
-                    try {
-                        logger.info(`Attempting to join voice channel ${voiceChannel.name} in ${category.name}`);
-                        
-                        const voiceConfig: VoiceConfig = {
-                            provider: context.adventure.voiceType === 'ELEVENLABS' ? 'ELEVENLABS' : 
-                                     context.adventure.voiceType === 'KOKORO' ? 'KOKORO' : 'DISCORD',
-                            language: context.language,
-                            ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY
-                        };
+                // Add loot to context
+                contextManager.addLoot(parsedResponse.loot.description, parsedResponse.loot.rewards);
+            }
 
-                        voicePromises = await playNarration(voiceChannel, [narrationText, atmosphereText], voiceConfig);
-                    } catch (voiceError) {
-                        logger.error('Error in voice playback:', voiceError);
-                        // Continue execution even if voice playback fails
-                    }
+            // 6. Extract response components
+            const narrationText = context.language === 'en-US' 
+                ? parsedResponse.narration
+                : parsedResponse.narracao;
+            
+            const atmosphereText = context.language === 'en-US'
+                ? parsedResponse.atmosphere
+                : parsedResponse.atmosfera;
+
+            const suggestedActions = context.language === 'en-US'
+                ? parsedResponse.available_actions
+                : parsedResponse.acoes_disponiveis;
+
+            if (!narrationText || !suggestedActions?.length) {
+                logger.error('Invalid response structure:\n' + prettyPrintLog(JSON.stringify({ parsedResponse })) + "\n\n");
+                throw new Error('Invalid response structure - missing required fields');
+            }
+
+            // Format the response for display
+            const formattedResponse = context.language === 'en-US' 
+                ? `📖 **Narration**\n${narrationText}${atmosphereText ? `\n\n🌍 **Atmosphere**\n${atmosphereText}` : ''}${contextManager.getFormattedContext()}\n\n⚡ **Fast Actions**\n${suggestedActions.map((a: string) => `• ${a}`).join('\n')}\n`
+                : `📖 **Narração**\n${narrationText}${atmosphereText ? `\n\n🌍 **Atmosfera**\n${atmosphereText}` : ''}${contextManager.getFormattedContext()}\n\n⚡ **Ações Rápidas**\n${suggestedActions.map((a: string) => `• ${a}`).join('\n')}\n`;
+
+            // 8. Format the response for display
+            const formattedResponseWithContext = formattedResponse;
+
+            // 9. Store memory
+            if (context.adventure?.id) {
+                try {
+                    const orchestrator = new Orchestrator(context.adventure.id);
+                    await orchestrator.processInput(action, context);
+                    await orchestrator.storeResponse(narrationText, context);
+                    logger.debug('Successfully stored scene memory');
+                } catch (memoryError) {
+                    logger.error('Error creating scene memory:\n' + memoryError);
                 }
             }
-        }
 
-        // Wait for first sentence to start playing before showing the response
-        try {
-            await voicePromises.startedPlaying;
-        } catch (error) {
-            logger.error('Error waiting for voice to start:', error);
-        }
-
-        // Display the response text without buttons
-        let responseMessage;
-        try {
-            responseMessage = await channel.send({
-                embeds: [{
-                    title: '🎭 Action Result',
-                    description: formattedResponse,
-                    color: 0x99ff99,
-                    footer: {
-                        text: footerText
-                    }
-                }]
-            });
-        } catch (error) {
-            logger.error('Error sending response message:', error);
-            throw error; // This is critical, so we should stop if it fails
-        }
-
-        // Wait for all audio to finish before adding buttons
-        try {
-            await voicePromises.finished;
-        } catch (error) {
-            logger.error('Error waiting for voice playback to finish:', error);
-        }
-
-        // Add the action buttons
-        const buttons = createActionButtons(suggestedActions);
-        const components = buttons.length > 0 ? [{
-            type: 1,
-            components: buttons
-        }] : [];
-
-        // Edit the response message to add buttons
-        try {
-            if (responseMessage) {
-                await responseMessage.edit({
+            // 10. Display response and handle voice
+            let responseMessage;
+            try {
+                // Send initial response
+                responseMessage = await channel.send({
                     embeds: [{
                         title: '🎭 Action Result',
-                        description: formattedResponse,
+                        description: formattedResponseWithContext,
                         color: 0x99ff99,
-                    }],
-                    components: components
+                        footer: {
+                            text: context.language === 'en-US' 
+                                ? `💭 *Use /action for custom actions*`
+                                : `💭 *Use /action para ações personalizadas*`
+                        }
+                    }]
                 });
-            }
-        } catch (error) {
-            logger.error('Error editing response message with buttons:', error);
-            // Continue execution even if button addition fails
-        }
 
-        // Finally, clear the thinking state
-        try {
-            if (interaction.deferred) {
-                await interaction.editReply({ 
-                    content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída'
-                });
-            }
-        } catch (error) {
-            logger.error('Error editing interaction reply:', error);
-            // Try to send a new reply if editing fails
-            try {
-                await interaction.followUp({
-                    content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída',
-                    ephemeral: true
-                });
-            } catch (followUpError) {
-                logger.error('Error sending follow-up message:', followUpError);
-            }
-        }
+                // Handle voice if enabled
+                if (context.adventure?.voiceType !== 'NONE' && interaction.guild && context.adventure?.categoryId) {
+                    try {
+                        const category = interaction.guild.channels.cache.get(context.adventure.categoryId);
+                        if (category?.type === ChannelType.GuildCategory) {
+                            const voiceChannel = category.children.cache.find(
+                                (channel: { name: string; type: ChannelType; }) => 
+                                    channel.name.toLowerCase() === 'table' && 
+                                    channel.type === ChannelType.GuildVoice
+                            ) as VoiceChannel;
 
-        logger.info(`Action processed for adventure ${context.adventure?.id}`);
+                            if (voiceChannel) {
+                                logger.info(`Found voice channel: ${voiceChannel.name} in category ${category.name}`);
+                                
+                                // Configure voice service
+                                const voiceConfig: VoiceConfig = {
+                                    provider: context.adventure.voiceType === 'ELEVENLABS' ? 'ELEVENLABS' : 'KOKORO',
+                                    language: context.language
+                                };
+
+                                if (voiceConfig.provider === 'ELEVENLABS') {
+                                    voiceConfig.ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+                                }
+
+                                logger.debug('Voice configuration:', {
+                                    provider: voiceConfig.provider,
+                                    language: voiceConfig.language,
+                                    hasElevenLabsKey: !!voiceConfig.ELEVENLABS_API_KEY
+                                });
+
+                                // Get voice service and generate audio
+                                const voiceService = await getVoiceService(voiceConfig.provider);
+                                const audioBuffer = await voiceService.speak(narrationText, voiceConfig);
+
+                                if (!audioBuffer || audioBuffer.length === 0) {
+                                    logger.warn('Received empty audio buffer from voice service');
+                                    return;
+                                }
+
+                                logger.info('Successfully generated audio, checking voice connection...');
+
+                                // Check for existing connection or create new one
+                                let connection = activeConnections.get(voiceChannel.guild.id);
+                                let isNewConnection = false;
+
+                                if (!connection || connection.state.status === VoiceConnectionStatus.Destroyed) {
+                                    isNewConnection = true;
+                                    connection = joinVoiceChannel({
+                                        channelId: voiceChannel.id,
+                                        guildId: voiceChannel.guild.id,
+                                        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+                                        selfDeaf: false,
+                                        selfMute: false
+                                    });
+                                    activeConnections.set(voiceChannel.guild.id, connection);
+                                }
+
+                                // Only wait for connection if it's new
+                                if (isNewConnection) {
+                                    try {
+                                        await new Promise<void>((resolve, reject) => {
+                                            const timeout = setTimeout(() => {
+                                                reject(new Error('Voice connection timeout'));
+                                            }, 30000);
+
+                                            const readyHandler = () => {
+                                                clearTimeout(timeout);
+                                                connection.off(VoiceConnectionStatus.Ready, readyHandler);
+                                                resolve();
+                                            };
+
+                                            connection.on(VoiceConnectionStatus.Ready, readyHandler);
+
+                                            // Handle disconnection
+                                            connection.on(VoiceConnectionStatus.Disconnected, async () => {
+                                                try {
+                                                    await Promise.race([
+                                                        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                                                        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                                                    ]);
+                                                } catch (error) {
+                                                    clearTimeout(timeout);
+                                                    connection.destroy();
+                                                    activeConnections.delete(voiceChannel.guild.id);
+                                                    reject(error);
+                                                }
+                                            });
+                                        });
+                                    } catch (error) {
+                                        logger.error('Failed to establish voice connection:', error);
+                                        activeConnections.delete(voiceChannel.guild.id);
+                                        throw error;
+                                    }
+                                }
+
+                                // Create audio player if needed
+                                const player = createAudioPlayer();
+                                connection.subscribe(player);
+
+                                // Create audio resource and play
+                                const stream = Readable.from(audioBuffer);
+                                const resource = createAudioResource(stream, {
+                                    inputType: StreamType.Arbitrary,
+                                    inlineVolume: true
+                                });
+
+                                if (resource.volume) {
+                                    resource.volume.setVolume(1.0);
+                                }
+
+                                // Create promises for tracking playback
+                                const voicePromises = {
+                                    startedPlaying: new Promise<void>((resolve) => {
+                                        player.once(AudioPlayerStatus.Playing, () => {
+                                            logger.info('Started playing audio');
+                                            resolve();
+                                        });
+                                    }),
+                                    finished: new Promise<void>((resolve) => {
+                                        player.once(AudioPlayerStatus.Idle, () => {
+                                            logger.info('Finished playing audio');
+                                            // Set a timeout to disconnect, but store it so it can be cancelled
+                                            const disconnectTimeout = setTimeout(() => {
+                                                logger.info('No new actions detected, disconnecting from voice channel');
+                                                safeDestroyConnection(connection, voiceChannel.guild.id);
+                                            }, 60000); // 1 minute timeout
+
+                                            // Store the timeout
+                                            (connection as any).disconnectTimeout = disconnectTimeout;
+                                            resolve();
+                                        });
+                                    })
+                                };
+
+                                // Handle connection state changes
+                                connection.on(VoiceConnectionStatus.Disconnected, async () => {
+                                    try {
+                                        await Promise.race([
+                                            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                                            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                                        ]);
+                                    } catch (error) {
+                                        logger.info('Connection disconnected, cleaning up...');
+                                        safeDestroyConnection(connection, voiceChannel.guild.id);
+                                    }
+                                });
+
+                                connection.on(VoiceConnectionStatus.Destroyed, () => {
+                                    logger.info('Connection destroyed, cleaning up...');
+                                    activeConnections.delete(voiceChannel.guild.id);
+                                    if ((connection as any).disconnectTimeout) {
+                                        clearTimeout((connection as any).disconnectTimeout);
+                                        delete (connection as any).disconnectTimeout;
+                                    }
+                                });
+
+                                // Clear any existing disconnect timeout
+                                if ((connection as any).disconnectTimeout) {
+                                    clearTimeout((connection as any).disconnectTimeout);
+                                    delete (connection as any).disconnectTimeout;
+                                }
+
+                                player.play(resource);
+                                logger.info('Audio playback started');
+                            } else {
+                                logger.warn('Voice channel "table" not found in category');
+                            }
+                        }
+                    } catch (voiceError) {
+                        logger.error('Error in voice setup:', voiceError);
+                    }
+                }
+
+                // Add action buttons
+                if (responseMessage) {
+                    try {
+                        const actionObjects = suggestedActions.map((actionText: string) => ({
+                            type: ActionType.NARRATIVE,
+                            text: actionText
+                        }));
+                        const buttons = await createActionButtons(actionObjects, context.language);
+                        const components = buttons.length > 0 ? [{
+                            type: 1,
+                            components: buttons
+                        }] : [];
+
+                        logger.debug('Adding action buttons:\n' + prettyPrintLog(JSON.stringify({ 
+                            buttonCount: buttons.length,
+                            actions: actionObjects
+                        })) + "\n\n");
+
+                        await responseMessage.edit({
+                            embeds: [{
+                                title: '🎭 Action Result',
+                                description: formattedResponseWithContext,
+                                color: 0x99ff99,
+                            }],
+                            components: components
+                        });
+                    } catch (buttonError) {
+                        logger.error('Error adding action buttons:', buttonError);
+                    }
+                }
+
+                // Clear the thinking state
+                if (interaction.deferred) {
+                    await interaction.editReply({ 
+                        content: context.language === 'en-US' ? '✅ Action completed' : '✅ Ação concluída'
+                    });
+                }
+
+                logger.info(`Action processed successfully for adventure ${context.adventure?.id}`);
+            } catch (displayError) {
+                logger.error('Error displaying response:', displayError);
+                throw displayError;
+            }
+        } catch (parseError) {
+            logger.error('Error parsing AI response:', parseError);
+            throw parseError;
+        }
     } catch (error) {
         logger.error('Error handling action response:', error);
         try {
             if (interaction.deferred) {
                 await interaction.editReply({ 
-                    content: context.language === 'en-US' 
-                        ? 'There was an error processing your action. Please try again.'
-                        : 'Houve um erro ao processar sua ação. Por favor, tente novamente.',
-                    ephemeral: true
-                });
-            } else {
-                await interaction.followUp({
                     content: context.language === 'en-US' 
                         ? 'There was an error processing your action. Please try again.'
                         : 'Houve um erro ao processar sua ação. Por favor, tente novamente.',
@@ -403,7 +1048,7 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
         }
 
         const adventure = await adventureService.getCurrentAdventure(dbUser.id);
-        logger.debug(`Retrieved adventure for user ${dbUser.id}:`, adventure);
+        logger.debug(`Retrieved adventure for user ${dbUser.id}:`, prettyPrintLog(JSON.stringify(adventure)));
 
         if (!adventure) {
             await interaction.editReply({
@@ -414,15 +1059,17 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
 
         try {
             const context = await adventureService.buildGameContext(adventure, description);
+            const gameMaster = new GameMaster(context.adventure?.id || '');
+            const response = await gameMaster.generateResponse(context);
             await handleActionResponse(interaction, context, description);
         } catch (aiError) {
-            logger.error('Error generating AI response:', aiError);
+            logger.error('Error generating AI response:\n' + aiError);
             await interaction.editReply({
                 content: 'Sorry, I had trouble processing your action. Please try again.',
             });
         }
     } catch (error) {
-        logger.error('Error in player action command:', error);
+        logger.error('Error in player action command:\n' + error);
         if (interaction.deferred) {
             await interaction.editReply({
                 content: translate('errors.generic'),
@@ -439,7 +1086,18 @@ export async function handlePlayerAction(interaction: ChatInputCommandInteractio
 export async function handleButtonAction(interaction: any, action: string) {
     try {
         await interaction.deferReply();
-        logger.debug(`Player action received.  \n\n${chalk.blue('ACTION: ') + action}\n`);
+        
+        // Extract the action text from the button that was clicked
+        const clickedButton = interaction.message.components[0].components.find(
+            (button: any) => button.customId === interaction.customId
+        );
+        
+        if (!clickedButton) {
+            throw new Error('Button not found');
+        }
+
+        const actionText = clickedButton.label;
+        logger.debug(`Button action received. \n\n${chalk.blue('ACTION: ') + actionText}\n`);
 
         // Get the message that contains the buttons
         const message = await interaction.message.fetch();
@@ -496,10 +1154,10 @@ export async function handleButtonAction(interaction: any, action: string) {
             return;
         }
 
-        const context = await adventureService.buildGameContext(userAdventure as unknown as Adventure, action);
-        await handleActionResponse(interaction, context, action);
+        const context = await adventureService.buildGameContext(userAdventure as unknown as Adventure, actionText);
+        await handleActionResponse(interaction, context, actionText);
     } catch (error) {
-        logger.error('Error handling button action:', error);
+        logger.error('Error handling button action:\n' + error);
         await interaction.editReply({ 
             content: 'There was an error processing your action.', 
             flags: MessageFlags.Ephemeral
@@ -519,7 +1177,7 @@ export function extractSuggestedActions(response: string): string[] {
         }
         return extractActionItems(actionsMatch[1]);
     } catch (error) {
-        logger.error('Error extracting actions:', error);
+        logger.error('Error extracting actions:\n' + error);
         return [];
     }
 }
@@ -535,31 +1193,62 @@ function extractActionItems(actionsText: string): string[] {
         .slice(0, 5); // Discord limit of 5 buttons
 }
 
-function createActionButtons(actions: string[]) {
-    if (!actions || actions.length === 0) return [];
+async function getEmojiForAction(action: string, language: string = 'en-US'): Promise<string> {
+    try {
+        const vectorStore = VectorStore.getInstance();
+        let highestSimilarity = -1;
+        let bestCategory = "default";
 
-    return actions.slice(0, 5).map(action => {
-        // Smart truncation that preserves meaning
-        let label = action;
-        if (label.length > 60) { // Reduced from 80 to 60 to ensure custom_id stays under 100
-            // Try to find a good breakpoint between 50-60 chars
-            const breakPoint = label.substring(0, 57).lastIndexOf(' ');
-            if (breakPoint > 0) {
-                label = label.substring(0, breakPoint) + '...';
-            } else {
-                // If no good breakpoint, do a hard truncate
-                label = label.substring(0, 57) + '...';
+        // Get concepts for the current language
+        const languageConcepts = ACTION_CONCEPTS[language as keyof typeof ACTION_CONCEPTS] || ACTION_CONCEPTS['en-US'];
+
+        // Compare action text with each category's concepts
+        for (const [category, data] of Object.entries(languageConcepts)) {
+            const { similarity } = await vectorStore.compareWithConcepts(action, data.concepts);
+            if (similarity > highestSimilarity) {
+                highestSimilarity = similarity;
+                bestCategory = category;
             }
         }
 
+        // Only use the category if similarity is above threshold
+        return highestSimilarity > 0.3 
+            ? languageConcepts[bestCategory as keyof typeof languageConcepts].emoji 
+            : "➡️";
+    } catch (error) {
+        logger.error('Error getting emoji for action:', error);
+        return "➡️";
+    }
+}
+
+async function createActionButtons(actions: GameAction[], language: string = 'en-US'): Promise<any[]> {
+    const buttons = await Promise.all(actions.map(async action => {
+        let style = ButtonStyle.Primary; // Default blue
+        
+        if (action.type === ActionType.QUESTION) {
+            style = ButtonStyle.Secondary;
+        } else if (action.type === ActionType.COMBAT) {
+            style = ButtonStyle.Danger;
+        }
+
+        const emoji = await getEmojiForAction(action.text, language);
+        const buttonId = `action_${action.type}_${uuidv4()}`;
+        
+        // Properly truncate text to 80 characters with ellipsis if needed
+        const truncatedText = action.text.length > 80 
+            ? action.text.substring(0, 77) + '...'
+            : action.text;
+
         return {
             type: 2,
-            style: ButtonStyle.Primary, // Use Primary (blue) for initial state
-            label,
-            custom_id: `action:${action.substring(0, 90)}`, // Limit custom_id to 90 chars
-            disabled: false
+            style,
+            label: truncatedText,
+            emoji: emoji,
+            custom_id: buttonId
         };
-    });
+    }));
+
+    return buttons;
 }
 
 export function toGameCharacter(character: any) {
@@ -573,4 +1262,17 @@ export async function getAdventureMemory(adventureId: string) {
     // Get adventure memory entries
     // Implementation...
     return [];
+}
+
+export { handleRollAction };
+
+function safeDestroyConnection(connection: VoiceConnection, guildId: string) {
+    try {
+        if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            connection.destroy();
+        }
+        activeConnections.delete(guildId);
+    } catch (error) {
+        logger.error('Error safely destroying connection:', error);
+    }
 } 

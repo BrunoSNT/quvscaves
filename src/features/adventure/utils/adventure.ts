@@ -1,5 +1,5 @@
-import { Adventure, GameContext, AdventureSettings } from '../types';
-import { WorldStyles, ToneStyles, MagicLevels } from '../../../shared/types/game';
+import { Adventure, AdventureSettings } from '../types';
+import { WorldStyle, ToneStyle, MagicLevel, GameContext } from '../../../shared/game/types';
 
 // Moving content from src/utils/adventure.ts
 export function formatAdventureContext(adventure: Adventure): GameContext {
@@ -16,7 +16,6 @@ export function formatAdventureContext(adventure: Adventure): GameContext {
             inventory: [],
             questProgress: ''
         },
-        adventure?: adventure.settings,
         language: adventure.settings.language || 'en-US',
         memory: {
             recentScenes: [],
@@ -28,13 +27,13 @@ export function formatAdventureContext(adventure: Adventure): GameContext {
     };
 }
 export function validateAdventureSettings(settings: Partial<AdventureSettings>): boolean {
-    if (!settings.worldStyle || !Object.values(WorldStyles).includes(settings.worldStyle)) {
+    if (!settings.worldStyle || !Object.values(WorldStyle).includes(settings.worldStyle)) {
         return false;
     }
-    if (!settings.toneStyle || !Object.values(ToneStyles).includes(settings.toneStyle)) {
+    if (!settings.toneStyle || !Object.values(ToneStyle).includes(settings.toneStyle)) {
         return false;
     }
-    if (!settings.magicLevel || !Object.values(MagicLevels).includes(settings.magicLevel)) {
+    if (!settings.magicLevel || !Object.values(MagicLevel).includes(settings.magicLevel)) {
         return false;
     }
     if (!settings.language) {
@@ -44,7 +43,7 @@ export function validateAdventureSettings(settings: Partial<AdventureSettings>):
 }
 
 export function generateAdventureDescription(context: GameContext): string {
-    const { adventure?, characters } = context;
+    const { adventure, characters } = context;
     return `A ${adventure?.worldStyle.toLowerCase()} adventure with a ${adventure?.toneStyle.toLowerCase()} tone. 
-Players: ${characters.map(c => `${c.name} (${c.class})`).join(', ')}`;
+Players: ${characters.map((c: { name: any; class: any; }) => `${c.name} (${c.class})`).join(', ')}`;
 } 
