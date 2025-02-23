@@ -38,7 +38,7 @@ export class ContextManager {
                 (this.context.language === 'en-US' ? '(Critical Failure!)' : '(Falha Crítica!)') : 
                 '';
 
-        const message = `🎲 ${outcome} ${marginText} ${criticalText}`.trim();
+        const message = `\n\n🎲 ${outcome} ${marginText} ${criticalText}`.trim();
         this.addUpdate({ type: 'SKILL_CHECK', message });
     }
 

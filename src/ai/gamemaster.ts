@@ -10,7 +10,7 @@ import axios from 'axios';
 import { VectorStore } from '../core/vector/store';
 import { calculateSimilarity } from '../shared/game/calculations';
 import { CombatDetectionResult, CombatState, GameReward } from '../shared/game/types';
-import { SkillCheck, SkillCheckResult, formatSkillCheckResult } from '../shared/game/skills';
+import { SkillCheck  } from '../shared/game/skills';
 import { SkillCheckAnalyzer } from './skillcheck';
 import { RewardAnalyzer } from './reward';
 import { QwenClient } from './qwen';
@@ -61,13 +61,13 @@ export class GameMaster {
         }
     }
 
-    async generateResponse(context: GameContext): Promise<string> {
+    async generateResponse(context: GameContext, customPrompt?: string): Promise<string> {
         let retryCount = 0;
         let lastError: Error | null = null;
 
         while (retryCount < this.maxRetries) {
             try {
-                const response = await this.attemptResponse(context, retryCount);
+                const response = await this.attemptResponse(context, retryCount, customPrompt);
                 if (response) {
                     return response;
                 }
@@ -84,7 +84,7 @@ export class GameMaster {
         return createFallbackResponse(context.language);
     }
 
-    private async attemptResponse(context: GameContext, retryCount: number): Promise<string> {
+    private async attemptResponse(context: GameContext, retryCount: number, customPrompt?: string): Promise<string> {
         const spinner = ora({
             text: chalk.cyan('Generating AI response...\n\n'),
             spinner: 'dots12'
@@ -92,7 +92,10 @@ export class GameMaster {
 
         try {
             // Get enhanced context from orchestrator
-            const enhancedContext = await this.orchestrator.getEnhancedContext(context);
+            const enhancedContext = await this.orchestrator.getEnhancedContext(context).catch(error => {
+                logger.warn('Error getting enhanced context:', error);
+                return context; // Fallback to original context
+            });
             
             const language = context.language;
             const lastSceneSummary = context.memory.recentScenes[0]?.summary || '';
@@ -109,13 +112,16 @@ export class GameMaster {
             const presencePenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
             const frequencyPenalty = 0.7 + (retryCount * 0.1) + (isSceneStagnating ? 0.2 : 0);
 
-            const prompt = getGamePrompt(language as SupportedLanguage);
+            const basePrompt = getGamePrompt(language as SupportedLanguage);
+            const systemPrompt = customPrompt || basePrompt.system;
+            const introPrompt = customPrompt ? '' : basePrompt.intro;
+
             const contextStr = buildContextString(enhancedContext, language as SupportedLanguage);
 
             // Construct the full prompt
             const fullPrompt = `<|im_start|>system
-${prompt.system}
-${prompt.intro}
+${systemPrompt}
+${introPrompt}
 
 CURRENT GAME CONTEXT:
 ${contextStr}
@@ -125,32 +131,6 @@ ${enhancedContext.additionalContext?.join('\n')}
 
 REASONING HISTORY:
 ${enhancedContext.reasoning?.join('\n')}
-
-RESPONSE FORMAT:
-You MUST respond with a valid JSON object. No other text or formatting is allowed.
-The response must match this exact structure for ${language === 'en-US' ? 'English' : 'Portuguese'}:
-
-${language === 'en-US' ? `{
-    "narration": "Vivid book like description introducing new story elements and develiping the plot. MUST advance plot and show consequences. DO NOT REPEAT previous scenes. Between 800 and 1200 characters.",
-    "atmosphere": "(Optional) Current mood, weather, and environmental details",
-    "available_actions": [
-        "Action 1 that leads to new discoveries or progression",
-        "Action 2 that develops character relationships",
-        "Action 3 that advances the current situation",
-        "Action 4 that asks for more details and information about the scene or character",
-        "Action 5 that regresses the current situation"
-    ]
-}` : `{
-    "narracao": "Descrição vívida, como em livro, introduzindo novos elementos e desenvolvendo o enredo. DEVE avançar a história e mostrar consequências. NÃO REPITA cenas anteriores. Entre 800 e 1200 caracteres.",
-    "atmosfera": "(Opcional) Humor atual, clima e detalhes do ambiente",
-    "acoes_disponiveis": [
-        "Ação 1 que leva a novas descobertas ou progressão",
-        "Ação 2 que desenvolve relacionamentos",
-        "Ação 3 que avança a situação atual",
-        "Ação 4 pede mais detalhes e informações sobre a cena ou personagem",
-        "Ação 5 que regride a situação atual",
-    ]
-}`}
 <|im_end|>
 <|im_start|>user
 ${context.playerActions[0]}
@@ -166,9 +146,10 @@ ${context.playerActions[0]}
                 isSceneStagnating,
                 retryCount
             })) + "\n\n");
-
+            console.log('Custom Prompt -> ');
+            console.log(customPrompt);
             // Log the full prompt
-            logger.debug('Full AI Prompt:\n' + prettyPrintLog(fullPrompt) + "\n\n");
+            logger.debug('Full AI Prompt:\n' + prettyPrintLog(customPrompt ? customPrompt : fullPrompt) + "\n\n");
 
             spinner.start();
             
@@ -234,8 +215,19 @@ ${context.playerActions[0]}
                 }
 
                 // Only process input and store response after validation
-                await this.orchestrator.processInput(context.playerActions[0], context);
-                await this.orchestrator.storeResponse(JSON.stringify(responseContent), context);
+                try {
+                    await this.orchestrator.processInput(context.playerActions[0], context);
+                } catch (error) {
+                    logger.warn('Error storing input memory:', error);
+                    // Continue even if memory storage fails
+                }
+
+                try {
+                    await this.orchestrator.storeResponse(JSON.stringify(responseContent), context);
+                } catch (error) {
+                    logger.warn('Error storing response memory:', error);
+                    // Continue even if memory storage fails
+                }
 
                 spinner.stop();
                 return JSON.stringify(responseContent);
@@ -252,27 +244,110 @@ ${context.playerActions[0]}
     private isValidResponse(response: any, language: SupportedLanguage): boolean {
         if (!response || typeof response !== 'object') return false;
 
-        if (language === 'en-US') {
-            return (
-                typeof response.narration === 'string' &&
-                Array.isArray(response.available_actions) &&
-                response.available_actions.length > 0
-            );
-        } else {
-            return (
-                typeof response.narracao === 'string' &&
-                Array.isArray(response.acoes_disponiveis) &&
-                response.acoes_disponiveis.length > 0
-            );
+        // Check required fields based on language
+        const requiredFields = language === 'en-US' 
+            ? {
+                world_context: 'string',
+                narration: 'string',
+                available_actions: 'array'
+            }
+            : {
+                contexto_mundo: 'string',
+                narracao: 'string',
+                acoes_disponiveis: 'array'
+            };
+
+        // Validate all required fields exist
+        for (const [field, type] of Object.entries(requiredFields)) {
+            if (!response[field]) {
+                logger.error(`Missing required field: ${field}`);
+                return false;
+            }
+            
+            if (type === 'array') {
+                // Handle both array and object formats
+                if (Array.isArray(response[field])) {
+                    if (response[field].length === 0) {
+                        logger.error(`Empty array for field: ${field}`);
+                        return false;
+                    }
+                } else if (typeof response[field] === 'object') {
+                    // Convert object format to array
+                    const values = Object.values(response[field]);
+                    if (values.length === 0) {
+                        logger.error(`Empty object for field: ${field}`);
+                        return false;
+                    }
+                    response[field] = values;
+                } else {
+                    logger.error(`Invalid type for field: ${field}, expected array or object, got ${typeof response[field]}`);
+                    return false;
+                }
+            } else if (type === 'string' && typeof response[field] !== 'string') {
+                logger.error(`Invalid type for field: ${field}, expected string, got ${typeof response[field]}`);
+                return false;
+            }
         }
+
+        // Split long messages into chunks for better voice processing
+        const narrationField = language === 'en-US' ? 'narration' : 'narracao';
+        const worldContextField = language === 'en-US' ? 'world_context' : 'contexto_mundo';
+        const atmosphereField = language === 'en-US' ? 'atmosphere' : 'atmosfera';
+
+        // Split each field into chunks at sentence boundaries
+        if (response[narrationField]) {
+            response[narrationField] = this.splitIntoChunks(response[narrationField]);
+        }
+        if (response[worldContextField]) {
+            response[worldContextField] = this.splitIntoChunks(response[worldContextField]);
+        }
+        if (response[atmosphereField]) {
+            response[atmosphereField] = this.splitIntoChunks(response[atmosphereField]);
+        }
+
+        return true;
+    }
+
+    private splitIntoChunks(text: string): string {
+        // Split text into chunks at sentence boundaries
+        const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
+        const chunks: string[] = [];
+        let currentChunk = '';
+
+        for (const sentence of sentences) {
+            // If adding this sentence would make the chunk too long, start a new chunk
+            if ((currentChunk + sentence).length > 500) {
+                if (currentChunk) {
+                    chunks.push(currentChunk.trim());
+                }
+                currentChunk = sentence;
+            } else {
+                currentChunk += sentence;
+            }
+        }
+
+        // Add the last chunk if there is one
+        if (currentChunk) {
+            chunks.push(currentChunk.trim());
+        }
+
+        // Join chunks with a space
+        return chunks.join(' ');
     }
 
     private formatResponse(response: any, language: SupportedLanguage): string {
-        if (language === 'en-US') {
-            return `${response.narration}\n\n${response.atmosphere ? `Atmosphere: ${response.atmosphere}\n\n` : ''}Available Actions:\n${response.available_actions.map((action: string) => `• ${action}`).join('\n')}`;
-        } else {
-            return `${response.narracao}\n\n${response.atmosfera ? `Atmosfera: ${response.atmosfera}\n\n` : ''}Ações Disponíveis:\n${response.acoes_disponiveis.map((action: string) => `• ${action}`).join('\n')}`;
-        }
+        const narrationField = language === 'en-US' ? 'narration' : 'narracao';
+        const atmosphereField = language === 'en-US' ? 'atmosphere' : 'atmosfera';
+        const actionsField = language === 'en-US' ? 'available_actions' : 'acoes_disponiveis';
+        const worldContextField = language === 'en-US' ? 'world_context' : 'contexto_mundo';
+        const worldContextTitle = language === 'en-US' ? 'World Context' : 'Contexto do Mundo';
+
+        return `${worldContextTitle}:\n${response[worldContextField]}\n\n${
+            response[narrationField]}\n\n${
+            response[atmosphereField] ? `${language === 'en-US' ? 'Atmosphere' : 'Atmosfera'}: ${response[atmosphereField]}\n\n` : ''
+        }${language === 'en-US' ? 'Available Actions' : 'Ações Disponíveis'}:\n${
+            response[actionsField].map((action: string) => `• ${action}`).join('\n')
+        }`;
     }
 
     async syncKnowledge(): Promise<void> {

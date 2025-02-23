@@ -36,45 +36,27 @@ export class Orchestrator {
         };
     }
 
-    private async storeMemory(content: string, type: 'human' | 'assistant'): Promise<void> {
-        const now = new Date();
-        // Prevent duplicate memories within a short time window (1 second)
-        if (now.getTime() - this.lastMemoryTimestamp.getTime() < 1000) {
-            return;
-        }
-
-        const episodicInput: EpisodicMemoryInput = {
-            type,
-            content,
-            metadata: {},
-            timestamp: now
-        };
-
-        try {
-            await this.memoryManager.episodic.add(episodicInput);
-            this.lastMemoryTimestamp = now;
-            logger.debug(`Successfully stored ${type} memory`);
-        } catch (error) {
-            logger.error(`Error storing ${type} memory:`, error);
-            throw error;
-        }
-    }
-
     async processInput(input: string, context: GameContext): Promise<void> {
         try {
             // Store the input as a scene memory
             const vectorStore = VectorStore.getInstance();
-            const memoryId = await vectorStore.addEntry({
-                id: crypto.randomUUID(),
-                vector: [], // This will be computed by the vector store
-                metadata: {
-                    type: 'action',
-                    content: input,
-                    timestamp: new Date(),
-                    adventureId: this.adventureId,
-                    characterId: context.characters[0]?.id
-                }
-            });
+            try {
+                const vector = await vectorStore.getEmbedding(input);
+                await vectorStore.addEntry({
+                    id: crypto.randomUUID(),
+                    vector,
+                    metadata: {
+                        type: 'action',
+                        content: input,
+                        timestamp: new Date(),
+                        adventureId: this.adventureId,
+                        characterId: context.characters[0]?.id
+                    }
+                });
+            } catch (error) {
+                logger.warn('Failed to store input in vector store:', error);
+                // Continue even if vector store fails
+            }
 
             // Update context with new memory
             if (!context.memory) {
@@ -146,28 +128,74 @@ export class Orchestrator {
 
     async storeResponse(response: string, context: GameContext): Promise<void> {
         try {
-            // Parse the response to get the narration
-            let narration: string;
+            // Parse the response to get all text content
+            let narration: string = '';
+            let worldContext: string = '';
+            let atmosphere: string = '';
+            
             try {
                 const parsed = JSON.parse(response);
-                narration = parsed.narration || parsed.narracao;
+                narration = parsed.narration || parsed.narracao || '';
+                worldContext = parsed.world_context || parsed.contexto_mundo || '';
+                atmosphere = parsed.atmosphere || parsed.atmosfera || '';
             } catch {
                 narration = response;
             }
 
-            // Store the response as a scene memory
+            // Store each text component as a scene memory
             const vectorStore = VectorStore.getInstance();
-            const memoryId = await vectorStore.addEntry({
-                id: crypto.randomUUID(),
-                vector: [], // This will be computed by the vector store
-                metadata: {
-                    type: 'scene',
-                    content: narration,
-                    timestamp: new Date(),
-                    adventureId: this.adventureId,
-                    characterId: context.characters[0]?.id
+            try {
+                // Store world context
+                if (worldContext) {
+                    const vector = await vectorStore.getEmbedding(worldContext);
+                    await vectorStore.addEntry({
+                        id: crypto.randomUUID(),
+                        vector,
+                        metadata: {
+                            type: 'world_context',
+                            content: worldContext,
+                            timestamp: new Date(),
+                            adventureId: this.adventureId,
+                            characterId: context.characters[0]?.id
+                        }
+                    });
                 }
-            });
+
+                // Store narration
+                if (narration) {
+                    const vector = await vectorStore.getEmbedding(narration);
+                    await vectorStore.addEntry({
+                        id: crypto.randomUUID(),
+                        vector,
+                        metadata: {
+                            type: 'scene',
+                            content: narration,
+                            timestamp: new Date(),
+                            adventureId: this.adventureId,
+                            characterId: context.characters[0]?.id
+                        }
+                    });
+                }
+
+                // Store atmosphere
+                if (atmosphere) {
+                    const vector = await vectorStore.getEmbedding(atmosphere);
+                    await vectorStore.addEntry({
+                        id: crypto.randomUUID(),
+                        vector,
+                        metadata: {
+                            type: 'atmosphere',
+                            content: atmosphere,
+                            timestamp: new Date(),
+                            adventureId: this.adventureId,
+                            characterId: context.characters[0]?.id
+                        }
+                    });
+                }
+            } catch (error) {
+                logger.warn('Failed to store response in vector store:', error);
+                // Continue even if vector store fails
+            }
 
             // Update context with new memory
             if (!context.memory) {
@@ -180,12 +208,29 @@ export class Orchestrator {
                 };
             }
 
-            // Add to recent scenes
-            context.memory.recentScenes.unshift({
-                summary: narration,
-                timestamp: new Date(),
-                type: 'scene'
-            });
+            // Add all components to recent scenes
+            const timestamp = new Date();
+            if (worldContext) {
+                context.memory.recentScenes.unshift({
+                    summary: worldContext,
+                    timestamp,
+                    type: 'world_context'
+                });
+            }
+            if (narration) {
+                context.memory.recentScenes.unshift({
+                    summary: narration,
+                    timestamp,
+                    type: 'scene'
+                });
+            }
+            if (atmosphere) {
+                context.memory.recentScenes.unshift({
+                    summary: atmosphere,
+                    timestamp,
+                    type: 'atmosphere'
+                });
+            }
 
             // Keep only last 5 scenes
             context.memory.recentScenes = context.memory.recentScenes.slice(0, 5);

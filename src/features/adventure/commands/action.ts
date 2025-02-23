@@ -14,13 +14,14 @@ import chalk from 'chalk';
 import { ActionType, GameAction } from '../../../shared/game/types';
 import { v4 as uuidv4 } from 'uuid';
 import { Orchestrator } from '../../../ai/orchestrator';
-import { SkillCheck, formatSkillCheckResult } from '../../../shared/game/skills';
+import { SkillCheck } from '../../../shared/game/skills';
 import { entersState } from '@discordjs/voice';
 import { StreamType } from '@discordjs/voice';
 import { VectorStore } from '../../../core/vector/store';
 import { DefaultCharacterService } from '../../character/services/character';
 import { GameReward } from '../../../shared/game/types';
 import { ContextManager } from '../../../shared/game/context';
+import { formatCharacterSheet } from '../../../shared/discord/sheet';
 
 const adventureService = new AdventureService();
 const activeConnections = new Map<string, VoiceConnection>();
@@ -438,35 +439,74 @@ async function handleRollAction(interaction: any, character?: any, language: str
 
         // If no character was passed, try to fetch it
         if (!character) {
+            // First try to find the active adventure for this user
             const adventure = await prisma.adventure.findFirst({
                 where: {
+                    status: 'ACTIVE',
                     players: {
                         some: {
-                            userId: interaction.user.id
+                            user: {
+                                discordId: interaction.user.id
+                            }
                         }
                     }
                 },
                 include: {
                     players: {
                         include: {
-                            character: true
+                            character: {
+                                include: {
+                                    CharacterSpell: true,
+                                    CharacterAbility: true
+                                }
+                            },
+                            user: true
                         }
                     }
                 }
             });
 
-            if (!adventure || !adventure.players[0]?.character) {
+            if (!adventure) {
+                logger.error('No active adventure found for user:', interaction.user.id);
                 await interaction.editReply({
                     content: language === 'en-US'
-                        ? 'Error: Character not found'
-                        : 'Erro: Personagem não encontrado',
+                        ? 'Error: No active adventure found'
+                        : 'Erro: Nenhuma aventura ativa encontrada',
                     components: []
                 });
                 return null;
             }
 
-            character = adventure.players[0].character;
+            // Find the player's character in this adventure
+            const player = adventure.players.find(p => p.user.discordId === interaction.user.id);
+            if (!player || !player.character) {
+                logger.error('No character found for user in adventure:', {
+                    userId: interaction.user.id,
+                    adventureId: adventure.id
+                });
+                await interaction.editReply({
+                    content: language === 'en-US'
+                        ? 'Error: Character not found in this adventure'
+                        : 'Erro: Personagem não encontrado nesta aventura',
+                    components: []
+                });
+                return null;
+            }
+
+            character = player.character;
             language = adventure.language || 'en-US';
+        }
+
+        // Verify character has required stats
+        if (!character.stats) {
+            logger.error('Character missing stats:', character.id);
+            await interaction.editReply({
+                content: language === 'en-US'
+                    ? 'Error: Character stats not found'
+                    : 'Erro: Estatísticas do personagem não encontradas',
+                components: []
+            });
+            return null;
         }
 
         // Get the corresponding ability score for this skill
@@ -916,7 +956,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                                             const disconnectTimeout = setTimeout(() => {
                                                 logger.info('No new actions detected, disconnecting from voice channel');
                                                 safeDestroyConnection(connection, voiceChannel.guild.id);
-                                            }, 60000); // 1 minute timeout
+                                            }, Math.max(60000, 1)); // Ensure timeout is at least 1ms
 
                                             // Store the timeout
                                             (connection as any).disconnectTimeout = disconnectTimeout;
@@ -1006,6 +1046,47 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
             } catch (displayError) {
                 logger.error('Error displaying response:', displayError);
                 throw displayError;
+            }
+
+            // Add this after processing rewards
+            if (parsedResponse.rewards?.length || parsedResponse.loot) {
+                const characterService = new DefaultCharacterService();
+                const updatedCharacter = await characterService.getCharacter(character.id);
+                
+                if (updatedCharacter) {
+                    // Format and send character sheet update
+                    const characterEmbed = formatCharacterSheet(updatedCharacter);
+                    
+                    // Find the character's channel in the category
+                    if (interaction.guild && context.adventure?.categoryId) {
+                        const category = interaction.guild.channels.cache.get(context.adventure.categoryId);
+                        if (category?.type === ChannelType.GuildCategory) {
+                            const characterChannel = category.children.cache.find(
+                                (channel: { name: string; }) => 
+                                    channel.name.toLowerCase() === `${character.name.toLowerCase()}-sheet`
+                            );
+
+                            if (characterChannel) {
+                                await characterChannel.send({
+                                    content: context.language === 'en-US'
+                                        ? '📝 Character sheet updated!'
+                                        : '📝 Ficha de personagem atualizada!',
+                                    embeds: [characterEmbed]
+                                });
+                            }
+                        }
+                    }
+
+                    // Add character sheet update to context
+                    const updateMessage = context.language === 'en-US'
+                        ? '📊 Character sheet has been updated with new rewards and items!'
+                        : '📊 Ficha de personagem foi atualizada com novas recompensas e itens!';
+                    
+                    if (!context.additionalContext) {
+                        context.additionalContext = [];
+                    }
+                    context.additionalContext.push(updateMessage);
+                }
             }
         } catch (parseError) {
             logger.error('Error parsing AI response:', parseError);

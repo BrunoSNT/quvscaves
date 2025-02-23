@@ -7,10 +7,17 @@ import {
     MessageActionRowComponentBuilder,
     ChannelType,
     GuildMember,
-    User
+    User,
+    ChatInputCommandInteraction,
+    MessageFlags,
+    Message,
+    TextChannel,
+    ButtonStyle,
+    CategoryChannel,
+    VoiceChannel
 } from 'discord.js';
-import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
-import { logger } from '../../../shared/logger';
+import { EmbedBuilder } from 'discord.js';
+import { logger, prettyPrintLog } from '../../../shared/logger';
 import { VoiceType, WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy, RollMode } from '../../../shared/game/types';
 import { prisma } from '../../../core/prisma';
 import { createCategoryChannel, createTextChannel, createPlayerChannels } from '../../../shared/discord/channels';
@@ -18,7 +25,22 @@ import { KOKORO_VOICES_BY_LANGUAGE, VOICE_DESCRIPTIONS } from '../../../features
 import { SupportedLanguage } from '../../../shared/i18n/types';
 import { getMessages } from '../../../shared/i18n/translations';
 import { Character } from '../../../../prisma/client';
-import { prettyPrintLog } from '../../../shared/logger';
+import { AdventureService } from '../services/adventure';
+import { GameMaster } from '../../../ai/gamemaster';
+import { Adventure } from '../types';
+import { ActionType } from '../../../shared/game/types';
+import { v4 as uuidv4 } from 'uuid';
+import { GameStats, GameSkills } from '../../../shared/game/types';
+import { VoiceConfig, VoiceProvider } from '../../../features/voice/types';
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnection, VoiceConnectionStatus } from '@discordjs/voice';
+import { Readable } from 'stream';
+import { getVoiceService } from '../../../features/voice/services';
+
+const adventureService = new AdventureService();
+
+function isValidLanguage(lang: string | null): lang is SupportedLanguage {
+    return lang === 'en-US' || lang === 'pt-BR';
+}
 
 export async function handleCreateAdventure(interaction: ChatInputCommandInteraction) {
     // Look up the database user based on their Discord ID
@@ -149,17 +171,12 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                             {
                                 label: 'Medieval',
                                 value: 'medieval',
-                                description: 'Low magic, historical feel'
+                                description: 'Historical medieval setting'
                             },
                             {
-                                label: 'Mythological',
-                                value: 'mythological',
-                                description: 'Based on real-world mythology'
-                            },
-                            {
-                                label: 'Post-Apocalyptic',
-                                value: 'post_apocalyptic',
-                                description: 'Ruined fantasy world'
+                                label: 'Wizarding World',
+                                value: 'wizarding_world',
+                                description: 'Harry Potter-style magical world with schools, wands, and magical creatures'
                             }
                         ])
                 );
@@ -500,6 +517,39 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     // First defer the reply
                     await i.deferReply({ flags: MessageFlags.Ephemeral });
 
+                    if (!i.guild) {
+                        logger.error('Guild not found');
+                        return;
+                    }
+
+                    // Ensure language is valid
+                    if (!language) {
+                        logger.error('Language is null');
+                        return;
+                    }
+
+                    if (!isValidLanguage(language)) {
+                        logger.error('Invalid language');
+                        return;
+                    }
+
+                    const category = i.guild.channels.cache.get(adventure.categoryId!) as CategoryChannel | undefined;
+                    if (!category) {
+                        logger.error('Category not found');
+                        return;
+                    }
+
+                    const voiceChannel = category.children.cache.find(
+                        (channel): channel is VoiceChannel => 
+                            channel.name.toLowerCase() === 'table' && 
+                            channel.type === ChannelType.GuildVoice
+                    );
+
+                    if (!voiceChannel) {
+                        logger.error('Voice channel not found');
+                        return;
+                    }
+
                     // Get the character of the user who clicked
                     const userCharacter = characters.find(c => c.user.discordId === i.user.id);
                     if (!userCharacter) {
@@ -511,64 +561,93 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                         return;
                     }
 
-                    // Default action based on language
-                    const defaultAction = language === 'pt-BR'
-                        ? 'Eu observo atentamente o ambiente ao meu redor, tentando absorver cada detalhe deste novo começo.'
-                        : 'I carefully observe my surroundings, taking in every detail of this new beginning.';
-
-                    try {
-                        // Import and call handlePlayerAction
-                        const { handlePlayerAction } = await import('./action');
-                        const actionInteraction = {
-                            ...i,
-                            commandName: 'action',
-                            options: {
-                                getString: (name: string) => {
-                                    if (name === 'description') return defaultAction;
-                                    if (name === 'adventureId') return adventure.id;
-                                    return null;
-                                }
-                            },
-                            user: i.user,
-                            guild: i.guild,
-                            channel: i.channel,
-                            client: i.client,
-                            reply: async (data: any) => {
-                                return i.editReply(data);
-                            },
-                            deferReply: async () => Promise.resolve(),
-                            editReply: i.editReply.bind(i),
-                            followUp: i.followUp.bind(i),
-                            replied: true,
-                            deferred: true,
-                            locale: language
-                        };
-                        
-                        // Handle the action
-                        await handlePlayerAction(actionInteraction as any);
-                        
-                        // Edit the deferred reply with success message
-                        await i.editReply({ 
-                            content: language === 'pt-BR'
-                                ? '✨ Aventura iniciada! Sua jornada começa...'
-                                : '✨ Adventure started! Your journey begins...'
-                        });
-
-                        // Remove the button after successful use
-                        const originalMessage = await i.message.fetch();
-                        if (originalMessage.components.length > 0) {
-                            await originalMessage.edit({ components: [] });
+                    // Create a new GameMaster instance
+                    const gameMaster = new GameMaster(adventure.id);
+                    
+                    // Build initial context and override what we need
+                    const context = await adventureService.buildGameContext(adventure as unknown as Adventure, '');
+                    const worldPrompt = generateInitialWorldPrompt(worldStyle, toneStyle, magicLevel, language);
+                    const response = await gameMaster.generateResponse({
+                        ...context,
+                        playerActions: [language === 'pt-BR' 
+                            ? 'Descrição vívida e detalhada do mundo incorporando todos os elementos necessários.'
+                            : 'Vivid and detailed world description incorporating all required elements.'],
+                        memory: {
+                            recentScenes: [],
+                            activeQuests: [],
+                            knownCharacters: [],
+                            discoveredLocations: [],
+                            importantItems: []
                         }
-                    } catch (error) {
-                        logger.error('Error executing default action:\n' + error);
-                        await i.editReply({ 
-                            content: language === 'pt-BR'
-                                ? 'Erro ao iniciar a aventura. Por favor, tente usar o comando `/action` manualmente.'
-                                : 'Error starting the adventure. Please try using the `/action` command manually.'
-                        });
+                    }, worldPrompt);
+                    
+                    if (!response) {
+                        throw new Error('Failed to generate world introduction');
+                    }
+
+                    const parsedResponse = JSON.parse(response);
+                    
+                    // Format the response based on language
+                    const formattedResponse = language === 'en-US' 
+                        ? `${parsedResponse.world_context}\n\n${parsedResponse.narration}\n\n${parsedResponse.atmosphere ? `## 🌅 Atmosphere\n${parsedResponse.atmosphere}\n\n` : ''}## ⚔️ Available Actions:\n${parsedResponse.available_actions.map((action: string) => `• ${action}`).join('\n')}`
+                        : `${parsedResponse.contexto_mundo}\n\n${parsedResponse.narracao}\n\n${parsedResponse.atmosfera ? `## 🌅 Atmosfera\n${parsedResponse.atmosfera}\n\n` : ''}## ⚔️ Ações Disponíveis:\n${parsedResponse.acoes_disponiveis.map((action: string) => `• ${action}`).join('\n')}`;
+
+                    // Configure voice service
+                    const voiceConfig: VoiceConfig = {
+                        provider: adventure.voiceType as VoiceProvider,
+                        language,
+                        speed: 1.0
+                    };
+
+                    if (adventure.voiceType === 'ELEVENLABS' && process.env.ELEVENLABS_API_KEY) {
+                        voiceConfig.ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+                    }
+
+                    // Get texts to narrate
+                    const textsToNarrate = [
+                        language === 'en-US' ? parsedResponse.world_context : parsedResponse.contexto_mundo,
+                        language === 'en-US' ? parsedResponse.narration : parsedResponse.narracao,
+                        language === 'en-US' ? parsedResponse.atmosphere : parsedResponse.atmosfera
+                    ].filter((text): text is string => typeof text === 'string' && text.length > 0);
+
+                    // Play narration
+                    await playNarration(voiceChannel, textsToNarrate, voiceConfig);
+
+                    // Send the formatted response
+                    await textChannel.send({
+                        embeds: [{
+                            title: language === 'pt-BR' ? '🌟 Bem-vindo à sua Aventura!' : '🌟 Welcome to Your Adventure!',
+                            description: formattedResponse,
+                            color: 0x7289da,
+                            footer: {
+                                text: language === 'pt-BR' 
+                                    ? `💭 *Use /action para ações personalizadas*`
+                                    : `💭 *Use /action for custom actions*`
+                            }
+                        }],
+                        components: [{
+                            type: 1,
+                            components: await createActionButtons(
+                                (language === 'en-US' ? parsedResponse.available_actions : parsedResponse.acoes_disponiveis)
+                                    .map((text: string) => ({ type: ActionType.NARRATIVE, text }))
+                            )
+                        }]
+                    });
+
+                    // Edit the deferred reply with success message
+                    await i.editReply({ 
+                        content: language === 'pt-BR'
+                            ? '✨ Aventura iniciada! Sua jornada começa...'
+                            : '✨ Adventure started! Your journey begins...'
+                    });
+
+                    // Remove the button after successful use
+                    const originalMessage = await i.message.fetch();
+                    if (originalMessage.components.length > 0) {
+                        await originalMessage.edit({ components: [] });
                     }
                 } catch (error) {
-                    logger.error('Error in collector:\n' + error);
+                    logger.error('Error in collector:', error);
                     try {
                         if (i.deferred) {
                             await i.editReply({
@@ -585,7 +664,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                             });
                         }
                     } catch (replyError) {
-                        logger.error('Error sending error message:\n' + replyError);
+                        logger.error('Error sending error message:', replyError);
                     }
                 }
             });
@@ -682,10 +761,10 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                     where: {
                         adventure: { status: 'ACTIVE' }
                     },
-                    include: { adventure: { select: { status: true } } }
+                    include: { adventure: { select: { status: true } }
                 }
             }
-        });
+        }});
 
         if (characters.length !== playerNames.length) {
             const foundNames = characters.map(c => c.name);
@@ -743,9 +822,8 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
                         { label: 'High Fantasy', value: 'high_fantasy', description: 'Classic D&D-style fantasy world' },
                         { label: 'Dark Fantasy', value: 'dark_fantasy', description: 'Darker themes, more dangerous world' },
                         { label: 'Steampunk', value: 'steampunk', description: 'Technology and magic mix' },
-                        { label: 'Medieval', value: 'medieval', description: 'Low magic, historical feel' },
-                        { label: 'Mythological', value: 'mythological', description: 'Based on real-world mythology' },
-                        { label: 'Post-Apocalyptic', value: 'post_apocalyptic', description: 'Ruined fantasy world' }
+                        { label: 'Medieval', value: 'medieval', description: 'Historical medieval setting' },
+                        { label: 'Wizarding World', value: 'wizarding_world', description: 'Harry Potter-style magical world with schools, wands, and magical creatures' }
                     ])
             );
 
@@ -975,5 +1053,134 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
     } catch (error) {
         logger.error('Error starting adventure:\n' + error);
         return await interaction.editReply('An error occurred while starting the adventure');
+    }
+}
+
+function generateInitialWorldPrompt(worldStyle: WorldStyle, toneStyle: ToneStyle, magicLevel: MagicLevel, language: SupportedLanguage): string {
+    const basePrompt = `You are a Game Master creating a rich and immersive world for a new adventure. Your task is to create a detailed initial world description that will serve as the foundation for the player's journey.
+
+WORLD PARAMETERS:
+- World Style: ${worldStyle}
+- Tone Style: ${toneStyle}
+- Magic Level: ${magicLevel}
+- Language: ${language}
+
+REQUIRED ELEMENTS:
+1. World Context (500 words):
+   - Brief overview of the world's history
+   - Current state of civilization
+   - Major powers and conflicts
+
+2. Narration (300 words):
+   - Vivid description of the immediate surroundings
+   - Notable landmarks and features
+   - Current events and situations
+
+3. Atmosphere (100 words):
+   - Current weather and time of day
+   - Mood and emotional tone
+   - Sensory details (sounds, smells, etc.)
+   - Environmental ambiance
+
+4. Available Actions:
+   - 5 specific actions players can take
+   - Mix of exploration, interaction, and investigation
+   - Each action should lead to potential adventure hooks
+
+RESPONSE FORMAT:
+You MUST respond with a valid JSON object that matches this exact structure:
+
+${language === 'en-US' ? `{
+    "world_context": "Detailed overview of the world's history and current state",
+    "narration": "Vivid description of the immediate surroundings and situation in a broad world context so we can understand the initial narrative",
+    "atmosphere": "Current mood, weather, and environmental details",
+    "available_actions": [
+        "Action 1 that explores the immediate surroundings",
+        "Action 2 that interacts with local inhabitants",
+        "Action 3 that investigates a point of interest",
+        "Action 4 that seeks more information about the world",
+        "Action 5 that begins a potential quest or mission"
+    ]
+}` : `{
+    "contexto_mundo": "Visão detalhada da história e estado atual do mundo",
+    "narracao": "Descrição vívida dos arredores imediatos e da situação em um contexto de mundo amplo para que possamos entender a narrativa inicial",
+    "atmosfera": "Humor atual, clima e detalhes ambientais",
+    "acoes_disponiveis": [
+        "Ação 1 que explora os arredores imediatos",
+        "Ação 2 que interage com habitantes locais",
+        "Ação 3 que investiga um ponto de interesse",
+        "Ação 4 que busca mais informações sobre o mundo",
+        "Ação 5 que inicia uma possível missão ou quest"
+    ]
+}`}`;
+
+    return basePrompt;
+}
+
+async function createActionButtons(actions: Array<{ type: ActionType; text: string }>): Promise<ButtonBuilder[]> {
+    return actions.map(action => {
+        let style = ButtonStyle.Primary; // Default blue
+        
+        if (action.type === ActionType.QUESTION) {
+            style = ButtonStyle.Secondary;
+        } else if (action.type === ActionType.COMBAT) {
+            style = ButtonStyle.Danger;
+        }
+
+        const buttonId = `action_${action.type}_${uuidv4()}`;
+        
+        // Properly truncate text to 80 characters with ellipsis if needed
+        const truncatedText = action.text.length > 80 
+            ? action.text.substring(0, 77) + '...'
+            : action.text;
+
+        return new ButtonBuilder()
+            .setCustomId(buttonId)
+            .setLabel(truncatedText)
+            .setStyle(style);
+    });
+}
+
+// Update the playNarration function
+async function playNarration(channel: VoiceChannel, texts: string[], config: VoiceConfig): Promise<void> {
+    try {
+        const connection = joinVoiceChannel({
+            channelId: channel.id,
+            guildId: channel.guild.id,
+            adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: false,
+            selfMute: false
+        });
+
+        const player = createAudioPlayer();
+        connection.subscribe(player);
+
+        // Get voice service and generate audio
+        const voiceService = await getVoiceService(config.provider);
+        
+        // Generate all audio buffers in parallel
+        const audioBuffers = await Promise.all(
+            texts.map(text => voiceService.speak(text, config))
+        );
+
+        // Play each audio buffer in sequence
+        for (const audioBuffer of audioBuffers) {
+            if (!audioBuffer || audioBuffer.length === 0) continue;
+
+            const stream = Readable.from(audioBuffer);
+            const resource = createAudioResource(stream);
+            
+            player.play(resource);
+
+            // Wait for the audio to finish playing
+            await new Promise<void>((resolve) => {
+                player.once(AudioPlayerStatus.Idle, () => resolve());
+            });
+        }
+
+        // Cleanup
+        connection.destroy();
+    } catch (error) {
+        logger.error('Error in playNarration:', error);
     }
 } 

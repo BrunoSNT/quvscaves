@@ -27,22 +27,3 @@ export enum DifficultyClass {
     VERY_HARD = 25,
     NEARLY_IMPOSSIBLE = 30
 }
-
-export function formatSkillCheckResult(result: SkillCheckResult, language: string = 'en-US'): string {
-    const outcome = result.success ? 
-        (language === 'en-US' ? 'Success' : 'Sucesso') : 
-        (language === 'en-US' ? 'Failure' : 'Falha');
-    
-    const margin = Math.abs(result.margin);
-    const marginText = language === 'en-US' ? 
-        `by ${margin}` : 
-        `por ${margin}`;
-
-    const criticalText = result.criticalSuccess ? 
-        (language === 'en-US' ? '(Critical Success!)' : '(Sucesso Crítico!)') :
-        result.criticalFailure ? 
-            (language === 'en-US' ? '(Critical Failure!)' : '(Falha Crítica!)') : 
-            '';
-
-    return `🎲 ${outcome} ${marginText} ${criticalText}`.trim();
-} 

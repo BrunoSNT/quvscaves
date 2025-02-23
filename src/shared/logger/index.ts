@@ -65,29 +65,8 @@ interface GameOutput {
     narracao?: string;
     atmosfera?: string;
     acoes_disponiveis?: string[];
-}
-
-export function formatGameOutput(output: string): string {
-    try {
-        const gameOutput = JSON.parse(output) as GameOutput;
-        const isEnglish = 'narration' in gameOutput;
-
-        // Format sections
-        const narration = isEnglish ? gameOutput.narration : gameOutput.narracao;
-        const atmosphere = isEnglish ? gameOutput.atmosphere : gameOutput.atmosfera;
-        const actions = isEnglish ? gameOutput.available_actions : gameOutput.acoes_disponiveis;
-
-        // Build formatted output
-        const sections = [
-            narration ? `📖 ${chalk.cyan('Narration')}:\n${chalk.white(narration)}\n` : '',
-            atmosphere ? `🌍 ${chalk.magenta('Atmosphere')}:\n${chalk.gray(atmosphere)}\n` : '',
-            actions?.length ? `⚔️ ${chalk.yellow('Available Actions')}:\n${actions.map(a => `• ${chalk.green(a)}`).join('\n')}` : ''
-        ].filter(Boolean);
-
-        return sections.join('\n') + '\n';
-    } catch {
-        return output;
-    }
+    world_context?: string;
+    contexto_mundo?: string;
 }
 
 /**
@@ -113,6 +92,11 @@ export function prettyPrintLog(rawLog: string): string {
         const match = query.match(/^\s*(\w+)/);
         return match ? match[1].toUpperCase() : "QUERY";
     };
+
+    // Check if it's an initial world generation log
+    if (cleaned.includes('📖 Narration:') || cleaned.includes('🌍 Atmosphere:')) {
+        return formatWorldGenerationLog(cleaned);
+    }
 
     // If the raw log is a JSON string with SQL info.
     try {
@@ -151,38 +135,78 @@ export function prettyPrintLog(rawLog: string): string {
     return cleaned;
 }
 
-/**
- * Formats generic JSON key/values as plain text.
- * Keys appear in grey and values in white, displayed line-by-line.
- */
-function formatGenericOutput(rawJson: string): string {
-    let parsed: any;
-    try {
-        parsed = JSON.parse(rawJson);
-    } catch {
-        return rawJson;
-    }
+function formatWorldGenerationLog(log: string): string {
+    const sections = log.split('\n\n');
+    let formatted = '\n';
 
-    const outputLines: string[] = [];
-
-    function traverse(obj: any, indent: number = 0): void {
-        const indentation = ' '.repeat(indent);
-        for (const key in obj) {
-            const value = obj[key];
-            if (typeof value === 'object' && value !== null) {
-                outputLines.push(`${indentation}${chalk.grey(key)}:`);
-                traverse(value, indent + 2);
-            } else {
-                outputLines.push(`${indentation}${chalk.grey(key)}: ${chalk.white(String(value))}`);
-            }
+    for (const section of sections) {
+        if (section.startsWith('📖 Narration:')) {
+            formatted += chalk.cyan('📖 Narration:') + '\n';
+            formatted += chalk.white(section.replace('📖 Narration:', '').trim()) + '\n\n';
+        } else if (section.startsWith('🌍 Atmosphere:')) {
+            formatted += chalk.yellow('🌍 Atmosphere:') + '\n';
+            formatted += chalk.white(section.replace('🌍 Atmosphere:', '').trim()) + '\n\n';
+        } else if (section.includes('⚔️ Available Actions:')) {
+            formatted += chalk.magenta('⚔️ Available Actions:') + '\n';
+            const actions = section.split('\n').filter(line => line.startsWith('•'));
+            formatted += actions.map(action => chalk.grey(action)).join('\n') + '\n';
+        } else if (section.trim()) {
+            formatted += chalk.white(section.trim()) + '\n\n';
         }
     }
 
-    if (typeof parsed === 'object' && parsed !== null) {
-        traverse(parsed, 0);
-    } else {
-        outputLines.push(chalk.white(String(parsed)));
-    }
+    return formatted;
+}
 
-    return '\n' + outputLines.join('\n') + '\n';
+function formatGameOutput(jsonStr: string): string {
+    try {
+        const output = JSON.parse(jsonStr) as GameOutput;
+        let formatted = '\n';
+
+        // Format world context if present
+        if (output.world_context || output.contexto_mundo) {
+            formatted += chalk.cyan('🌍 World Context:') + '\n';
+            formatted += chalk.white(output.world_context || output.contexto_mundo) + '\n\n';
+        }
+
+        // Format narration
+        if (output.narration || output.narracao) {
+            formatted += chalk.yellow('📖 Narration:') + '\n';
+            formatted += chalk.white(output.narration || output.narracao) + '\n\n';
+        }
+
+        // Format atmosphere if present
+        if (output.atmosphere || output.atmosfera) {
+            formatted += chalk.magenta('🌅 Atmosphere:') + '\n';
+            formatted += chalk.white(output.atmosphere || output.atmosfera) + '\n\n';
+        }
+
+        // Format available actions
+        const actions = output.available_actions || output.acoes_disponiveis;
+        if (actions && Array.isArray(actions)) {
+            formatted += chalk.blue('⚔️ Available Actions:') + '\n';
+            formatted += actions.map(action => chalk.grey(`• ${action}`)).join('\n') + '\n';
+        }
+
+        return formatted;
+    } catch (error) {
+        return jsonStr;
+    }
+}
+
+function formatGenericOutput(jsonStr: string): string {
+    try {
+        const output = JSON.parse(jsonStr);
+        return Object.entries(output)
+            .map(([key, value]) => {
+                const formattedKey = chalk.blue(key);
+                const formattedValue = typeof value === 'object' 
+                    ? JSON.stringify(value, null, 2)
+                    : String(value);
+                return `${formattedKey}: ${chalk.white(formattedValue)}`;
+            })
+            .join('\n');
+    } catch (error) {
+        return jsonStr;
+    }
 }

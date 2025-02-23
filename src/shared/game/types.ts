@@ -125,7 +125,8 @@ export enum WorldStyle {
     STEAMPUNK = 'STEAMPUNK',
     WESTERN = 'WESTERN',
     HISTORICAL = 'HISTORICAL',
-    POSTAPOCALYPTIC = 'POSTAPOCALYPTIC'
+    POSTAPOCALYPTIC = 'POSTAPOCALYPTIC',
+    WIZARDING_WORLD = 'WIZARDING_WORLD'  // Harry Potter themed world
 }
 
 export enum ToneStyle {

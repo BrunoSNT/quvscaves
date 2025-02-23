@@ -56,12 +56,6 @@ CORE PRINCIPLES:
 9. Your response MUST be always make the story narrative advance.
 10. DO NOT be repetivie.
 
-Each section MUST:
-- Contain relevant content
-- Follow the sequence above
-- Do not include sections that do not apply or duplicate sections
-- Ensure each required section appears exactly once with no repetitive or extraneous content
-
 RESPONSE FORMAT RULES:
 Every response MUST include these sections in order:
 1. [Narration] - Vivid description of environment and results of player actions. 800 to 1200 characters.
@@ -121,11 +115,6 @@ PRINCÍPIOS FUNDAMENTAIS:
 8. Desenvolver as ações do usuário com base no contexto para uma história contínua no tempo
 9. Sua resposta DEVE sempre fazer a história avançar.
 10. NÃO seja repetitivo.
-
-Cada seção DEVE:
-- Seguir a sequência acima
-- Não incluir seções que não se aplicam nem duplicar seções
-- Assegure-se de que cada seção obrigatória apareça exatamente uma vez, sem conteúdo repetitivo ou adicional.
 
 REGRAS DE FORMATO DE RESPOSTA:
 Toda resposta DEVEM seguir o formato destas seções em ordem:
@@ -219,7 +208,7 @@ ${context.memory.recentScenes.map((scene, index) =>
 ).join('\n')}
 
 Current Scene:
-${context.scene || 'Inside an abandoned castle. A shadowy figure with glowing red eyes was spotted in a dark corridor.'}
+${context.scene || ''}
 
 Active Quests:
 ${context.memory.activeQuests.map(quest => `- ${quest.title}: ${quest.description}`).join('\n')}
