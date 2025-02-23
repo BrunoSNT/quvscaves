@@ -134,63 +134,55 @@ export class Orchestrator {
             let atmosphere: string = '';
             
             try {
+                logger.debug('Parsing response JSON...');
                 const parsed = JSON.parse(response);
                 narration = parsed.narration || parsed.narracao || '';
                 worldContext = parsed.world_context || parsed.contexto_mundo || '';
                 atmosphere = parsed.atmosphere || parsed.atmosfera || '';
-            } catch {
+
+                logger.debug('Extracted text content: ' + {
+                    narrationLength: narration.length,
+                    worldContextLength: worldContext.length,
+                    atmosphereLength: atmosphere.length
+                });
+            } catch (parseError) {
+                logger.warn('Failed to parse response JSON, using raw response: ' + parseError);
                 narration = response;
             }
 
-            // Store each text component as a scene memory
+            // Store all text components together for better performance
             const vectorStore = VectorStore.getInstance();
             try {
-                // Store world context
-                if (worldContext) {
-                    const vector = await vectorStore.getEmbedding(worldContext);
-                    await vectorStore.addEntry({
-                        id: crypto.randomUUID(),
-                        vector,
-                        metadata: {
-                            type: 'world_context',
-                            content: worldContext,
-                            timestamp: new Date(),
-                            adventureId: this.adventureId,
-                            characterId: context.characters[0]?.id
+                // Combine all text components with markers
+                const combinedText = [
+                    worldContext ? `[WORLD_CONTEXT] ${worldContext}` : '',
+                    narration ? `[NARRATION] ${narration}` : '',
+                    atmosphere ? `[ATMOSPHERE] ${atmosphere}` : ''
+                ].filter(Boolean).join('\n\n');
+
+                if (combinedText) {
+                    logger.debug('Storing combined text in vector store: ' + {
+                        totalLength: combinedText.length,
+                        components: {
+                            worldContext: worldContext ? 'present' : 'absent',
+                            narration: narration ? 'present' : 'absent',
+                            atmosphere: atmosphere ? 'present' : 'absent'
                         }
                     });
-                }
 
-                // Store narration
-                if (narration) {
-                    const vector = await vectorStore.getEmbedding(narration);
+                    const vector = await vectorStore.getEmbedding(combinedText);
                     await vectorStore.addEntry({
                         id: crypto.randomUUID(),
                         vector,
                         metadata: {
                             type: 'scene',
-                            content: narration,
+                            content: combinedText,
                             timestamp: new Date(),
                             adventureId: this.adventureId,
                             characterId: context.characters[0]?.id
                         }
                     });
-                }
-
-                // Store atmosphere
-                if (atmosphere) {
-                    const vector = await vectorStore.getEmbedding(atmosphere);
-                    await vectorStore.addEntry({
-                        id: crypto.randomUUID(),
-                        vector,
-                        metadata: {
-                            type: 'atmosphere',
-                            content: atmosphere,
-                            timestamp: new Date(),
-                            adventureId: this.adventureId,
-                            characterId: context.characters[0]?.id
-                        }
-                    });
+                    logger.debug('Successfully stored text in vector store');
                 }
             } catch (error) {
                 logger.warn('Failed to store response in vector store:', error);
@@ -208,29 +200,24 @@ export class Orchestrator {
                 };
             }
 
-            // Add all components to recent scenes
+            // Add all components to recent scenes in a single entry
             const timestamp = new Date();
-            if (worldContext) {
-                context.memory.recentScenes.unshift({
-                    summary: worldContext,
-                    timestamp,
-                    type: 'world_context'
-                });
-            }
-            if (narration) {
-                context.memory.recentScenes.unshift({
-                    summary: narration,
-                    timestamp,
-                    type: 'scene'
-                });
-            }
-            if (atmosphere) {
-                context.memory.recentScenes.unshift({
-                    summary: atmosphere,
-                    timestamp,
-                    type: 'atmosphere'
-                });
-            }
+            const sceneEntry = {
+                summary: [
+                    worldContext && `World Context: ${worldContext}`,
+                    narration && `Narration: ${narration}`,
+                    atmosphere && `Atmosphere: ${atmosphere}`
+                ].filter(Boolean).join('\n\n'),
+                timestamp,
+                type: 'scene'
+            };
+
+            logger.debug('Adding scene entry to memory: ' + {
+                timestamp: timestamp.toISOString(),
+                summaryLength: sceneEntry.summary.length
+            });
+
+            context.memory.recentScenes.unshift(sceneEntry);
 
             // Keep only last 5 scenes
             context.memory.recentScenes = context.memory.recentScenes.slice(0, 5);

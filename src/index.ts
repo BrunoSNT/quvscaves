@@ -50,7 +50,7 @@ const client = new Client({
 });
 
 // Add this line to verify env vars are loaded
-console.log('Environment check:', {
+console.log('Environment check: ' + {
     hasElevenLabsKey: !!process.env.ELEVENLABS_API_KEY,
     keyLength: process.env.ELEVENLABS_API_KEY?.length
 });
@@ -488,7 +488,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     return await sendResponse([]);
                 }
 
-                logger.debug('Found adventures for autocomplete:', {
+                logger.debug('Found adventures for autocomplete: ' + {
                     count: user.adventures.length,
                     adventures: user.adventures.map(a => ({ id: a.id, name: a.name }))
                 });
@@ -496,7 +496,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 const choices = user.adventures
                     .filter(adv => {
                         const matchesSearch = adv.name.toLowerCase().includes(focusedValue);
-                        logger.debug('Adventure filter:', {
+                        logger.debug('Adventure filter: ' + {
                             name: adv.name,
                             matchesSearch,
                             searchValue: focusedValue
@@ -508,7 +508,7 @@ client.on(Events.InteractionCreate, async interaction => {
                         value: adv.id
                     }));
 
-                logger.debug('Sending autocomplete choices:', {
+                logger.debug('Sending autocomplete choices: ' + {
                     choicesCount: choices.length,
                     choices
                 });

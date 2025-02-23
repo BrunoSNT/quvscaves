@@ -40,7 +40,7 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 (prisma as any).$on('error', (e: Error) => {
-    logger.error('Database error:', {
+    logger.error('Database error: ' + {
         message: e.message,
         stack: e.stack
     });

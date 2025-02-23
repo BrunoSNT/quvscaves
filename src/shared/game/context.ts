@@ -16,7 +16,7 @@ export class ContextManager {
         if (!this.context.additionalContext) {
             this.context.additionalContext = [];
         }
-        logger.debug('Initialized context manager with context:', {
+        logger.debug('Initialized context manager with context: ' + {
             language: context.language,
             characterCount: context.characters.length,
             existingContext: this.context.additionalContext.length
@@ -134,7 +134,7 @@ export class ContextManager {
     }
 
     private addUpdate(update: ContextUpdate): void {
-        logger.debug('Adding context update:', {
+        logger.debug('Adding context update: ' + {
             type: update.type,
             message: update.message,
             metadata: update.metadata

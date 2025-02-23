@@ -37,6 +37,7 @@ import { Readable } from 'stream';
 import { getVoiceService } from '../../../features/voice/services';
 import { VectorStore } from '../../../core/vector/store';
 import { ACTION_CONCEPTS } from './action';
+import { entersState } from '@discordjs/voice';
 
 const adventureService = new AdventureService();
 
@@ -568,7 +569,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     
                     // Build initial context and override what we need
                     const context = await adventureService.buildGameContext(adventure as unknown as Adventure, '');
-                    const worldPrompt = generateInitialWorldPrompt(worldStyle, toneStyle, magicLevel, language);
+                    const worldPrompt = generateInitialWorldPrompt(worldStyle, toneStyle, magicLevel, language, context.characters[0].name);
                     const response = await gameMaster.generateResponse({
                         ...context,
                         playerActions: [language === 'pt-BR' 
@@ -588,6 +589,23 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     }
 
                     const parsedResponse = JSON.parse(response);
+
+                    // Validate the response content
+                    const worldContext = language === 'en-US' ? parsedResponse.world_context : parsedResponse.contexto_mundo;
+                    const narration = language === 'en-US' ? parsedResponse.narration : parsedResponse.narracao;
+                    const atmosphere = language === 'en-US' ? parsedResponse.atmosphere : parsedResponse.atmosfera;
+
+                    if (!worldContext || typeof worldContext !== 'string' || worldContext === 'Visão detalhada da história e estado atual do mundo') {
+                        throw new Error('Invalid world context generated');
+                    }
+
+                    if (!narration || typeof narration !== 'string' || narration === 'Descrição vívida dos arredores imediatos e da situação em um contexto de mundo amplo para que possamos entender a narrativa inicial') {
+                        throw new Error('Invalid narration generated');
+                    }
+
+                    if (!atmosphere || typeof atmosphere !== 'string' || atmosphere === 'Humor atual, clima e detalhes ambientais') {
+                        throw new Error('Invalid atmosphere generated');
+                    }
                     
                     // Configure voice service
                     const voiceConfig: VoiceConfig = {
@@ -601,58 +619,83 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     }
 
                     // Get texts to narrate
-                    const textsToNarrate = [
-                        language === 'en-US' ? parsedResponse.world_context : parsedResponse.contexto_mundo,
-                        language === 'en-US' ? parsedResponse.narration : parsedResponse.narracao,
-                        language === 'en-US' ? parsedResponse.atmosphere : parsedResponse.atmosfera
-                    ].filter((text): text is string => typeof text === 'string' && text.length > 0);
+                    const textsToNarrate = [];
 
-                    // Start playing narration and get the promises
-                    const { startedPlaying, finished } = await playNarration(voiceChannel, textsToNarrate, voiceConfig);
+                    // Split texts by paragraphs and add them
+                    if (worldContext && typeof worldContext === 'string') {
+                        const paragraphs = worldContext.split('\n\n').filter(p => p.trim().length > 0);
+                        logger.info(`World context split into ${paragraphs.length} paragraphs`);
+                        textsToNarrate.push(...paragraphs);
+                    }
 
-                    // Send the first embed with world context as soon as voice starts playing
-                    startedPlaying.then(async () => {
-                        try {
-                            // First message with world context
-                            const worldContextEmbed = new EmbedBuilder()
-                                .setTitle(language === 'pt-BR' ? '🌟 Bem-vindo à sua Aventura!' : '🌟 Welcome to Your Adventure!')
-                                .setDescription(language === 'en-US' 
-                                    ? parsedResponse.world_context
-                                    : parsedResponse.contexto_mundo)
-                                .setColor(0x7289da);
+                    if (narration && typeof narration === 'string') {
+                        const paragraphs = narration.split('\n\n').filter(p => p.trim().length > 0);
+                        logger.info(`Narration split into ${paragraphs.length} paragraphs`);
+                        textsToNarrate.push(...paragraphs);
+                    }
 
-                            await textChannel.send({ embeds: [worldContextEmbed] });
+                    if (atmosphere && typeof atmosphere === 'string') {
+                        const paragraphs = atmosphere.split('\n\n').filter(p => p.trim().length > 0);
+                        logger.info(`Atmosphere split into ${paragraphs.length} paragraphs`);
+                        textsToNarrate.push(...paragraphs);
+                    }
 
-                            // Second message with narration, atmosphere, and actions
-                            const actionButtons = await createActionButtons(
-                                (language === 'en-US' ? parsedResponse.available_actions : parsedResponse.acoes_disponiveis)
-                                    .map((text: string) => ({ type: ActionType.NARRATIVE, text }))
-                            );
+                    // Filter out any empty strings and validate
+                    const validTexts = textsToNarrate.filter(text => typeof text === 'string' && text.trim().length > 0);
 
-                            const narrativeEmbed = new EmbedBuilder()
-                                .setDescription(language === 'en-US'
-                                    ? `${parsedResponse.narration}\n\n${parsedResponse.atmosphere ? `## 🌅 Atmosphere\n${parsedResponse.atmosphere}\n\n` : ''}## ⚔️ Available Actions:\n${parsedResponse.available_actions.map((action: string) => `• ${action}`).join('\n')}`
-                                    : `${parsedResponse.narracao}\n\n${parsedResponse.atmosfera ? `## 🌅 Atmosfera\n${parsedResponse.atmosfera}\n\n` : ''}## ⚔️ Ações Disponíveis:\n${parsedResponse.acoes_disponiveis.map((action: string) => `• ${action}`).join('\n')}`)
-                                .setColor(0x7289da)
-                                .setFooter({
-                                    text: language === 'pt-BR' 
-                                        ? `💭 *Use /action para ações personalizadas*`
-                                        : `💭 *Use /action for custom actions*`
-                                });
+                    if (validTexts.length === 0) {
+                        throw new Error('No valid text content to narrate');
+                    }
 
-                            await textChannel.send({
-                                embeds: [narrativeEmbed],
-                                components: [{
-                                    type: 1,
-                                    components: actionButtons
-                                }]
-                            });
-                        } catch (error) {
-                            logger.error('Error sending messages:', error);
-                        }
-                    }).catch(error => {
-                        logger.error('Error in startedPlaying promise:', error);
+                    logger.info(`Total paragraphs to narrate: ${validTexts.length}`);
+                    validTexts.forEach((text, index) => {
+                        logger.info(`Paragraph ${index + 1}/${validTexts.length}:`, text.substring(0, 100) + (text.length > 100 ? '...' : ''));
                     });
+
+                    // Send embeds first
+                    logger.info('Sending embeds before audio starts...');
+                    try {
+                        // First message with world context
+                        const worldContextEmbed = new EmbedBuilder()
+                            .setTitle(language === 'pt-BR' ? '🌟 Bem-vindo à sua Aventura!' : '🌟 Welcome to Your Adventure!')
+                            .setDescription(worldContext)
+                            .setColor(0x7289da);
+
+                        await textChannel.send({ embeds: [worldContextEmbed] });
+                        logger.info('World context embed sent');
+
+                        // Second message with narration, atmosphere, and actions
+                        const actionButtons = await createActionButtons(
+                            (language === 'en-US' ? parsedResponse.available_actions : parsedResponse.acoes_disponiveis)
+                                .map((text: string) => ({ type: ActionType.NARRATIVE, text }))
+                        );
+
+                        const narrativeEmbed = new EmbedBuilder()
+                            .setDescription(language === 'en-US'
+                                ? `${narration}\n\n${atmosphere ? `## 🌅 Atmosphere\n${atmosphere}\n\n` : ''}## ⚔️ Available Actions:\n${parsedResponse.available_actions.map((action: string) => `• ${action}`).join('\n')}`
+                                : `${narration}\n\n${atmosphere ? `## 🌅 Atmosfera\n${atmosphere}\n\n` : ''}## ⚔️ Ações Disponíveis:\n${parsedResponse.acoes_disponiveis.map((action: string) => `• ${action}`).join('\n')}`)
+                            .setColor(0x7289da)
+                            .setFooter({
+                                text: language === 'pt-BR' 
+                                    ? `💭 *Use /action para ações personalizadas*`
+                                    : `💭 *Use /action for custom actions*`
+                            });
+
+                        await textChannel.send({
+                            embeds: [narrativeEmbed],
+                            components: [{
+                                type: 1,
+                                components: actionButtons
+                            }]
+                        });
+                        logger.info('Narrative embed sent');
+                    } catch (error) {
+                        logger.error('Error sending embeds:', error);
+                        throw error;
+                    }
+
+                    // Start playing narration
+                    const { startedPlaying, finished } = await playNarration(voiceChannel, validTexts, voiceConfig);
 
                     // Edit the deferred reply with success message
                     await i.editReply({ 
@@ -1080,7 +1123,7 @@ export async function handleStartAdventure(interaction: ChatInputCommandInteract
     }
 }
 
-function generateInitialWorldPrompt(worldStyle: WorldStyle, toneStyle: ToneStyle, magicLevel: MagicLevel, language: SupportedLanguage): string {
+function generateInitialWorldPrompt(worldStyle: WorldStyle, toneStyle: ToneStyle, magicLevel: MagicLevel, language: SupportedLanguage, playerName: string): string {
     const basePrompt = `You are a Game Master creating a rich and immersive world for a new adventure. Your task is to create a detailed initial world description that will serve as the foundation for the player's journey.
 
 WORLD PARAMETERS:
@@ -1088,14 +1131,15 @@ WORLD PARAMETERS:
 - Tone Style: ${toneStyle}
 - Magic Level: ${magicLevel}
 - Language: ${language}
+- Player Name: ${playerName} (Should not use in the world context)
 
 REQUIRED ELEMENTS:
-1. World Context (500 words):
+1. World Context (1000 words):
    - Brief overview of the world's history
    - Current state of civilization
    - Major powers and conflicts
 
-2. Narration (300 words):
+2. Narration (500 words):
    - Vivid description of the immediate surroundings
    - Notable landmarks and features
    - Current events and situations
@@ -1112,31 +1156,40 @@ REQUIRED ELEMENTS:
    - Each action should lead to potential adventure hooks
 
 RESPONSE FORMAT:
-You MUST respond with a valid JSON object that matches this exact structure:
+You must respond with ONLY a valid JSON object. No additional text, no explanations, no comments.
+The response must be a single JSON object with the following structure:
 
 ${language === 'en-US' ? `{
-    "world_context": "Detailed overview of the world's history and current state",
-    "narration": "Vivid description of the immediate surroundings and situation in a broad world context so we can understand the initial narrative",
-    "atmosphere": "Current mood, weather, and environmental details",
+    "world_context": "Your detailed world context here",
+    "narration": "Your vivid narration here",
+    "atmosphere": "Your atmospheric description here",
     "available_actions": [
-        "Action 1 that explores the immediate surroundings",
-        "Action 2 that interacts with local inhabitants",
-        "Action 3 that investigates a point of interest",
-        "Action 4 that seeks more information about the world",
-        "Action 5 that begins a potential quest or mission"
+        "First specific action",
+        "Second specific action",
+        "Third specific action",
+        "Fourth specific action",
+        "Fifth specific action"
     ]
 }` : `{
-    "contexto_mundo": "Visão detalhada da história e estado atual do mundo",
-    "narracao": "Descrição vívida dos arredores imediatos e da situação em um contexto de mundo amplo para que possamos entender a narrativa inicial",
-    "atmosfera": "Humor atual, clima e detalhes ambientais",
+    "contexto_mundo": "Seu contexto detalhado do mundo aqui",
+    "narracao": "Sua narração vívida aqui",
+    "atmosfera": "Sua descrição atmosférica aqui",
     "acoes_disponiveis": [
-        "Ação 1 que explora os arredores imediatos",
-        "Ação 2 que interage com habitantes locais",
-        "Ação 3 que investiga um ponto de interesse",
-        "Ação 4 que busca mais informações sobre o mundo",
-        "Ação 5 que inicia uma possível missão ou quest"
+        "Primeira ação específica",
+        "Segunda ação específica",
+        "Terceira ação específica",
+        "Quarta ação específica",
+        "Quinta ação específica"
     ]
-}`}`;
+}`}
+
+IMPORTANT:
+1. The response must be ONLY the JSON object shown above
+2. Do not include any text before or after the JSON
+3. Do not use placeholder text - generate unique, creative content
+4. Ensure all JSON fields are properly escaped
+5. Each field must contain substantial, original content
+6. The JSON must be properly formatted and valid`;
 
     return basePrompt;
 }
@@ -1195,13 +1248,28 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
         logger.info('Starting voice narration...');
         logger.info(`Received ${texts.length} texts to narrate`);
 
+        // Create promises early
+        let startedPlayingResolve!: (value: void | PromiseLike<void>) => void;
+        let finishedResolve!: (value: void | PromiseLike<void>) => void;
+        let startedPlayingReject!: (reason: any) => void;
+        let finishedReject!: (reason: any) => void;
+
+        const startedPlaying = new Promise<void>((resolve, reject) => {
+            startedPlayingResolve = resolve;
+            startedPlayingReject = reject;
+        });
+
+        const finished = new Promise<void>((resolve, reject) => {
+            finishedResolve = resolve;
+            finishedReject = reject;
+        });
+
         // Validate texts
         if (texts.length === 0) {
             logger.warn('No texts to narrate');
-            return {
-                startedPlaying: Promise.resolve(),
-                finished: Promise.resolve()
-            };
+            startedPlayingResolve();
+            finishedResolve();
+            return { startedPlaying, finished };
         }
 
         // Log the texts for debugging
@@ -1223,12 +1291,25 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
             logger.info('Voice connection is ready');
         });
 
-        connection.on(VoiceConnectionStatus.Disconnected, () => {
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
             logger.warn('Voice connection disconnected');
+            try {
+                await Promise.race([
+                    entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                    entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                ]);
+            } catch (error) {
+                logger.error('Connection destroyed due to error:', error);
+                startedPlayingReject(error);
+                finishedReject(error);
+                connection.destroy();
+            }
         });
 
         connection.on('error', (error) => {
             logger.error('Voice connection error:', error);
+            startedPlayingReject(error);
+            finishedReject(error);
         });
 
         logger.info('Creating audio player...');
@@ -1237,10 +1318,20 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
         // Add player state logging
         player.on('error', error => {
             logger.error('Audio player error:', error);
+            startedPlayingReject(error);
+            finishedReject(error);
         });
 
+        let hasStartedPlaying = false;
+
+        // Resolve startedPlaying as soon as audio starts playing
         player.on(AudioPlayerStatus.Playing, () => {
-            logger.info('Audio player is playing');
+            logger.info('Audio player started playing');
+            if (!hasStartedPlaying) {
+                logger.info('Resolving startedPlaying promise');
+                hasStartedPlaying = true;
+                startedPlayingResolve();
+            }
         });
 
         player.on(AudioPlayerStatus.Idle, () => {
@@ -1250,152 +1341,56 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
         logger.info('Subscribing connection to player...');
         connection.subscribe(player);
 
-        // Create promises for tracking playback
-        let startedPlayingResolve!: (value: void | PromiseLike<void>) => void;
-        let finishedResolve!: (value: void | PromiseLike<void>) => void;
-        const startedPlaying = new Promise<void>((resolve) => {
-            startedPlayingResolve = resolve;
-        });
-        const finished = new Promise<void>((resolve) => {
-            finishedResolve = resolve;
-        });
-
         // Get voice service
         logger.info('Getting voice service...');
         const voiceService = await getVoiceService(config.provider);
         logger.info(`Using voice service: ${config.provider}`);
-        
-        // Split texts into sentences
-        const splitIntoSentences = (text: string): string[] => {
-            return text.split(/(?<=[.!?])\s+|\s*$/)
-                .map(s => s.trim())
-                .filter(s => s.length > 0);
-        };
 
-        // Process each text into sentences and group them into chunks
-        logger.info('Processing texts into chunks...');
-        const processedTexts = texts.map((text, index) => {
-            if (!text || text.trim().length === 0) {
-                logger.warn(`Text ${index + 1} is empty, skipping...`);
-                return [];
-            }
+        try {
+            // Play paragraphs sequentially as they're generated
+            for (let i = 0; i < texts.length; i++) {
+                const text = texts[i];
+                const paragraphNumber = i + 1;
 
-            logger.info(`Processing text ${index + 1}/${texts.length}, length: ${text.length} chars`);
-            const sentences = splitIntoSentences(text);
-            const chunks: string[] = [];
-            let currentChunk = '';
+                logger.info(`Processing paragraph ${paragraphNumber}/${texts.length}`);
+                const buffer = await voiceService.speak(text, config);
 
-            for (const sentence of sentences) {
-                if ((currentChunk + sentence).length > 500) {
-                    if (currentChunk) {
-                        chunks.push(currentChunk.trim());
-                    }
-                    currentChunk = sentence;
-                } else {
-                    currentChunk += (currentChunk ? ' ' : '') + sentence;
-                }
-            }
-            if (currentChunk) {
-                chunks.push(currentChunk.trim());
-            }
-            logger.info(`Text ${index + 1} split into ${chunks.length} chunks`);
-            return chunks;
-        });
-
-        // Flatten the array of chunks
-        const allChunks = processedTexts.flat();
-        logger.info(`Total chunks to process: ${allChunks.length}`);
-
-        if (allChunks.length === 0) {
-            logger.warn('No valid chunks to narrate');
-            return {
-                startedPlaying: Promise.resolve(),
-                finished: Promise.resolve()
-            };
-        }
-
-        // Generate first two segments in parallel
-        logger.info('Generating first two segments...');
-        const firstTwoSegments = await Promise.all(
-            allChunks.slice(0, 2).map(async (chunk, index) => {
-                logger.info(`Generating audio for chunk ${index + 1}/2: ${chunk.substring(0, 50)}...`);
-                const buffer = await voiceService.speak(chunk, config);
-                logger.info(`Generated audio buffer for chunk ${index + 1}, size: ${buffer?.length || 0} bytes`);
-                return buffer;
-            })
-        );
-        logger.info('First two segments generated');
-
-        // Start playing first two segments
-        let isFirstBuffer = true;
-        for (const audioBuffer of firstTwoSegments) {
-            if (!audioBuffer || audioBuffer.length === 0) {
-                logger.warn('Received empty audio buffer, skipping...');
-                continue;
-            }
-
-            logger.info(`Creating readable stream for audio buffer of size: ${audioBuffer.length} bytes`);
-            const stream = Readable.from(audioBuffer);
-            logger.info('Creating audio resource from stream...');
-            const resource = createAudioResource(stream);
-            
-            logger.info('Playing audio resource...');
-            player.play(resource);
-
-            // Resolve startedPlaying promise when the first buffer starts playing
-            if (isFirstBuffer) {
-                player.once(AudioPlayerStatus.Playing, () => {
-                    logger.info('First audio segment started playing');
-                    startedPlayingResolve();
-                });
-                isFirstBuffer = false;
-            }
-
-            // Wait for the audio to finish playing
-            await new Promise<void>((resolve) => {
-                player.once(AudioPlayerStatus.Idle, () => {
-                    logger.info('Audio segment finished playing');
-                    resolve();
-                });
-            });
-        }
-
-        // Generate and play remaining segments
-        if (allChunks.length > 2) {
-            logger.info(`Generating remaining ${allChunks.length - 2} segments...`);
-            const remainingSegments = await Promise.all(
-                allChunks.slice(2).map(async (chunk, index) => {
-                    logger.info(`Generating audio for remaining chunk ${index + 1}/${allChunks.length - 2}`);
-                    return voiceService.speak(chunk, config);
-                })
-            );
-
-            for (const audioBuffer of remainingSegments) {
-                if (!audioBuffer || audioBuffer.length === 0) {
-                    logger.warn('Received empty audio buffer, skipping...');
+                if (!buffer || buffer.length === 0) {
+                    logger.warn(`Empty audio buffer for paragraph ${paragraphNumber}, skipping...`);
                     continue;
                 }
 
-                logger.info(`Playing remaining audio buffer of size: ${audioBuffer.length} bytes`);
-                const stream = Readable.from(audioBuffer);
+                logger.info(`Playing paragraph ${paragraphNumber}/${texts.length} (${buffer.length} bytes)`);
+                const stream = Readable.from(buffer);
                 const resource = createAudioResource(stream);
-                
                 player.play(resource);
 
-                // Wait for the audio to finish playing
+                // If this is the first paragraph, resolve startedPlaying
+                if (paragraphNumber === 1 && !hasStartedPlaying) {
+                    logger.info('First paragraph started playing, resolving startedPlaying');
+                    hasStartedPlaying = true;
+                    startedPlayingResolve();
+                }
+
+                // Wait for this paragraph to finish before playing the next one
                 await new Promise<void>((resolve) => {
                     player.once(AudioPlayerStatus.Idle, () => {
-                        logger.info('Audio segment finished playing');
+                        logger.info(`Paragraph ${paragraphNumber} finished playing`);
                         resolve();
                     });
                 });
             }
-        }
 
-        // Cleanup
-        logger.info('Audio playback completed, cleaning up...');
-        connection.destroy();
-        finishedResolve();
+            // All audio has finished playing
+            logger.info(`All ${texts.length} paragraphs completed playback`);
+            finishedResolve();
+
+        } catch (error) {
+            logger.error('Error during audio playback:', error);
+            startedPlayingReject(error);
+            finishedReject(error);
+            throw error;
+        }
 
         return { startedPlaying, finished };
     } catch (error) {

@@ -77,7 +77,7 @@ export async function createPlayerChannels(category: CategoryChannel, characters
             channels.push(channel);
         }
     } catch (error) {
-        logger.error('Error creating player channels:', {
+        logger.error('Error creating player channels: ' + {
             error: error instanceof Error 
                 ? { message: error.message, name: error.name, stack: error.stack } 
                 : error,

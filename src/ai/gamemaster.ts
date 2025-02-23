@@ -36,7 +36,7 @@ export class GameMaster {
 
     public async determineSkillCheck(action: string, context: GameContext): Promise<SkillCheck | null> {
         try {
-            logger.debug('Analyzing action for skill check:', {
+            logger.debug('Analyzing action for skill check: ' + {
                 action,
                 context: context.additionalContext
             });
@@ -44,7 +44,7 @@ export class GameMaster {
             const skillCheck = await this.skillCheckAnalyzer.analyze(action, context);
             
             if (skillCheck) {
-                logger.info('Determined skill check:', {
+                logger.info('Determined skill check: ' + {
                     skill: skillCheck.skill,
                     difficulty: skillCheck.difficulty,
                     advantage: skillCheck.advantage,
@@ -67,20 +67,48 @@ export class GameMaster {
 
         while (retryCount < this.maxRetries) {
             try {
+                logger.info(`Attempt ${retryCount + 1} of ${this.maxRetries} to generate response`);
                 const response = await this.attemptResponse(context, retryCount, customPrompt);
                 if (response) {
-                    return response;
+                    // Validate the response is proper JSON
+                    try {
+                        const parsed = JSON.parse(response);
+                        const requiredFields = context.language === 'en-US' 
+                            ? ['world_context', 'narration', 'atmosphere', 'available_actions']
+                            : ['contexto_mundo', 'narracao', 'atmosfera', 'acoes_disponiveis'];
+                        
+                        const missingFields = requiredFields.filter(field => !parsed[field]);
+                        if (missingFields.length > 0) {
+                            throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+                        }
+                        
+                        logger.info('Successfully generated valid response');
+                        return response;
+                    } catch (parseError) {
+                        logger.error('Response validation failed: ' + {
+                            error: parseError,
+                            response: response.substring(0, 200) + '...'
+                        });
+                        throw parseError;
+                    }
                 }
                 retryCount++;
             } catch (error) {
                 lastError = error as Error;
-                logger.error(`Error generating response (attempt ${retryCount + 1}):`, error);
+                logger.error(`Error generating response (attempt ${retryCount + 1}):`, {
+                    error: error instanceof Error ? error.message : error,
+                    retryCount,
+                    maxRetries: this.maxRetries
+                });
                 retryCount++;
             }
         }
 
         // If all retries failed, return a fallback response
-        logger.error('All response generation attempts failed:', lastError);
+        logger.error('All response generation attempts failed: ' + {
+            error: lastError?.message,
+            totalAttempts: retryCount
+        });
         return createFallbackResponse(context.language);
     }
 
@@ -146,10 +174,6 @@ ${context.playerActions[0]}
                 isSceneStagnating,
                 retryCount
             })) + "\n\n");
-            console.log('Custom Prompt -> ');
-            console.log(customPrompt);
-            // Log the full prompt
-            logger.debug('Full AI Prompt:\n' + prettyPrintLog(customPrompt ? customPrompt : fullPrompt) + "\n\n");
 
             spinner.start();
             
@@ -166,11 +190,12 @@ ${context.playerActions[0]}
                 stream: false
             });
 
-            // Log the raw response from the AI
-            logger.debug('Raw AI Response:\n' + prettyPrintLog(JSON.stringify({
+            // Log the raw response content before any processing
+            logger.info('Raw AI Response Content:' + {
                 responseType: typeof response.data,
-                responseLength: typeof response.data === 'string' ? response.data.length : JSON.stringify(response.data).length
-            })) + "\n\n");
+                responseLength: typeof response.data === 'string' ? response.data.length : JSON.stringify(response.data).length,
+                rawContent: typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)
+            });
 
             let responseContent: any;
             
@@ -180,11 +205,9 @@ ${context.playerActions[0]}
                     // Try to find a valid JSON object in the response
                     const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
+                        logger.debug('Found JSON in response:', jsonMatch[0]);
                         responseContent = JSON.parse(jsonMatch[0]);
-                        logger.debug('Extracted JSON from response object:\n' + prettyPrintLog(JSON.stringify({
-                            extractedJson: jsonMatch[0],
-                            parsedContent: responseContent
-                        })) + "\n\n");
+                        logger.debug('Parsed JSON content:', responseContent);
                     } else {
                         logger.error('No JSON object found in response:', response.data.response);
                         throw new Error('No valid JSON found in response');
@@ -192,11 +215,9 @@ ${context.playerActions[0]}
                 } else if (typeof response.data === 'string') {
                     const jsonMatch = response.data.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
+                        logger.debug('Found JSON in string response:', jsonMatch[0]);
                         responseContent = JSON.parse(jsonMatch[0]);
-                        logger.debug('Extracted JSON from response string:\n' + prettyPrintLog(JSON.stringify({
-                            extractedJson: jsonMatch[0],
-                            parsedContent: responseContent
-                        })) + "\n\n");
+                        logger.debug('Parsed JSON content:', responseContent);
                     } else {
                         logger.error('No JSON object found in response string:', response.data);
                         throw new Error('No valid JSON found in response');
@@ -205,12 +226,12 @@ ${context.playerActions[0]}
 
                 // Validate response structure
                 if (!this.isValidResponse(responseContent, language as SupportedLanguage)) {
-                    logger.error('Invalid response structure:\n' + prettyPrintLog(JSON.stringify({
+                    logger.error('Invalid response structure: ' + {
                         responseContent,
                         expectedKeys: language === 'en-US' 
                             ? ['narration', 'available_actions'] 
                             : ['narracao', 'acoes_disponiveis']
-                    })) + "\n\n");
+                    });
                     throw new Error('Invalid response structure');
                 }
 
@@ -242,7 +263,10 @@ ${context.playerActions[0]}
     }
 
     private isValidResponse(response: any, language: SupportedLanguage): boolean {
-        if (!response || typeof response !== 'object') return false;
+        if (!response || typeof response !== 'object') {
+            logger.error('Response is null or not an object');
+            return false;
+        }
 
         // Check required fields based on language
         const requiredFields = language === 'en-US' 
@@ -257,82 +281,66 @@ ${context.playerActions[0]}
                 acoes_disponiveis: 'array'
             };
 
-        // Validate all required fields exist
+        // Validate all required fields exist and are not placeholder text
         for (const [field, type] of Object.entries(requiredFields)) {
             if (!response[field]) {
                 logger.error(`Missing required field: ${field}`);
                 return false;
             }
-            
-            if (type === 'array') {
-                // Handle both array and object formats
-                if (Array.isArray(response[field])) {
-                    if (response[field].length === 0) {
-                        logger.error(`Empty array for field: ${field}`);
-                        return false;
-                    }
-                } else if (typeof response[field] === 'object') {
-                    // Convert object format to array
-                    const values = Object.values(response[field]);
-                    if (values.length === 0) {
-                        logger.error(`Empty object for field: ${field}`);
-                        return false;
-                    }
-                    response[field] = values;
-                } else {
-                    logger.error(`Invalid type for field: ${field}, expected array or object, got ${typeof response[field]}`);
+
+            // Check for placeholder text
+            if (type === 'string') {
+                const text = response[field];
+                if (typeof text !== 'string' || text.trim().length === 0) {
+                    logger.error(`Empty or invalid text for field: ${field}`);
                     return false;
                 }
-            } else if (type === 'string' && typeof response[field] !== 'string') {
-                logger.error(`Invalid type for field: ${field}, expected string, got ${typeof response[field]}`);
-                return false;
+
+                // Check for placeholder text in Portuguese
+                if (language === 'pt-BR') {
+                    if (field === 'contexto_mundo' && text === 'Visão detalhada da história e estado atual do mundo') {
+                        logger.error('Placeholder text detected for world context');
+                        return false;
+                    }
+                    if (field === 'narracao' && text === 'Descrição vívida dos arredores imediatos e da situação em um contexto de mundo amplo para que possamos entender a narrativa inicial') {
+                        logger.error('Placeholder text detected for narration');
+                        return false;
+                    }
+                }
+
+                // Log the actual content for debugging
+                logger.debug(`Content for ${field}:`, text.substring(0, 100) + '...');
+            } else if (type === 'array') {
+                if (!Array.isArray(response[field]) || response[field].length === 0) {
+                    logger.error(`Invalid or empty array for field: ${field}`);
+                    return false;
+                }
+                // Log the actions for debugging
+                logger.debug(`Actions for ${field}:`, response[field]);
             }
         }
 
-        // Split long messages into chunks for better voice processing
+        // Split each text field into chunks at sentence boundaries
         const narrationField = language === 'en-US' ? 'narration' : 'narracao';
         const worldContextField = language === 'en-US' ? 'world_context' : 'contexto_mundo';
         const atmosphereField = language === 'en-US' ? 'atmosphere' : 'atmosfera';
 
-        // Split each field into chunks at sentence boundaries
-        if (response[narrationField]) {
-            response[narrationField] = this.splitIntoChunks(response[narrationField]);
-        }
-        if (response[worldContextField]) {
-            response[worldContextField] = this.splitIntoChunks(response[worldContextField]);
-        }
-        if (response[atmosphereField]) {
-            response[atmosphereField] = this.splitIntoChunks(response[atmosphereField]);
-        }
+        // Process each text field
+        [narrationField, worldContextField, atmosphereField].forEach(field => {
+            if (response[field] && typeof response[field] === 'string') {
+                logger.debug(`Processing ${field} for chunking...`);
+                const originalLength = response[field].length;
+                response[field] = this.splitIntoChunks(response[field]);
+                logger.debug(`${field} processed: ${originalLength} chars -> ${response[field].length} chars`);
+            }
+        });
 
         return true;
     }
 
     private splitIntoChunks(text: string): string {
-        // Split text into chunks at sentence boundaries
-        const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
-        const chunks: string[] = [];
-        let currentChunk = '';
-
-        for (const sentence of sentences) {
-            // If adding this sentence would make the chunk too long, start a new chunk
-            if ((currentChunk + sentence).length > 500) {
-                if (currentChunk) {
-                    chunks.push(currentChunk.trim());
-                }
-                currentChunk = sentence;
-            } else {
-                currentChunk += sentence;
-            }
-        }
-
-        // Add the last chunk if there is one
-        if (currentChunk) {
-            chunks.push(currentChunk.trim());
-        }
-
-        // Join chunks with a space
-        return chunks.join(' ');
+        // Don't split the text, return it as is
+        return text.trim();
     }
 
     private formatResponse(response: any, language: SupportedLanguage): string {
@@ -430,7 +438,7 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 
     async determineRewards(action: string, context: GameContext): Promise<GameReward[] | null> {
         try {
-            logger.debug('Analyzing action for rewards:', {
+            logger.debug('Analyzing action for rewards: ' + {
                 action,
                 context: context.additionalContext
             });
@@ -438,7 +446,7 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
             const rewards = await this.rewardAnalyzer.analyze(action, context);
             
             if (rewards?.length) {
-                logger.info('Determined rewards:', {
+                logger.info('Determined rewards: ' + {
                     count: rewards.length,
                     types: rewards.map(r => r.type)
                 });

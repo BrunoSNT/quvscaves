@@ -480,7 +480,7 @@ async function handleRollAction(interaction: any, character?: any, language: str
             // Find the player's character in this adventure
             const player = adventure.players.find(p => p.user.discordId === interaction.user.id);
             if (!player || !player.character) {
-                logger.error('No character found for user in adventure:', {
+                logger.error('No character found for user in adventure: ' + {
                     userId: interaction.user.id,
                     adventureId: adventure.id
                 });
@@ -855,7 +855,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                                     voiceConfig.ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
                                 }
 
-                                logger.debug('Voice configuration:', {
+                                logger.debug('Voice configuration: ' + {
                                     provider: voiceConfig.provider,
                                     language: voiceConfig.language,
                                     hasElevenLabsKey: !!voiceConfig.ELEVENLABS_API_KEY
