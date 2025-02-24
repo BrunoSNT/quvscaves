@@ -45,6 +45,66 @@ function isValidLanguage(lang: string | null): lang is SupportedLanguage {
     return lang === 'en-US' || lang === 'pt-BR';
 }
 
+function splitTextIntoChunks(text: string): string[] {
+    // First split into paragraphs
+    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+    
+    const chunks: string[] = [];
+    for (const paragraph of paragraphs) {
+        // If paragraph is short enough, keep it as is
+        if (paragraph.length <= 500) {
+            chunks.push(paragraph);
+            continue;
+        }
+        
+        // Split long paragraphs into sentences
+        const sentences = paragraph
+            .split(/(?<=[.!?])\s+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0);
+            
+        let currentChunk = '';
+        
+        for (const sentence of sentences) {
+            // If sentence itself is too long, split at natural breaks
+            if (sentence.length > 500) {
+                // First add the current chunk if it exists
+                if (currentChunk) {
+                    chunks.push(currentChunk);
+                    currentChunk = '';
+                }
+                
+                // Split long sentence at natural breaks
+                const subChunks = sentence
+                    .split(/(?<=[,;:])\s+/)
+                    .map(chunk => chunk.trim())
+                    .filter(chunk => chunk.length > 0);
+                
+                chunks.push(...subChunks);
+                continue;
+            }
+            
+            // If adding this sentence would make chunk too long, start a new one
+            if (currentChunk && (currentChunk.length + sentence.length + 1 > 500)) {
+                chunks.push(currentChunk);
+                currentChunk = sentence;
+            } else {
+                // Add to current chunk with proper spacing
+                currentChunk = currentChunk 
+                    ? `${currentChunk} ${sentence}`
+                    : sentence;
+            }
+        }
+        
+        // Add any remaining chunk
+        if (currentChunk) {
+            chunks.push(currentChunk);
+        }
+    }
+    
+    return chunks;
+}
+
 export async function handleCreateAdventure(interaction: ChatInputCommandInteraction) {
     // Look up the database user based on their Discord ID
     const dbUser = await prisma.user.findUnique({
@@ -623,21 +683,21 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
 
                     // Split texts by paragraphs and add them
                     if (worldContext && typeof worldContext === 'string') {
-                        const paragraphs = worldContext.split('\n\n').filter(p => p.trim().length > 0);
-                        logger.info(`World context split into ${paragraphs.length} paragraphs`);
-                        textsToNarrate.push(...paragraphs);
+                        const chunks = splitTextIntoChunks(worldContext);
+                        logger.info(`World context split into ${chunks.length} chunks`);
+                        textsToNarrate.push(...chunks);
                     }
 
                     if (narration && typeof narration === 'string') {
-                        const paragraphs = narration.split('\n\n').filter(p => p.trim().length > 0);
-                        logger.info(`Narration split into ${paragraphs.length} paragraphs`);
-                        textsToNarrate.push(...paragraphs);
+                        const chunks = splitTextIntoChunks(narration);
+                        logger.info(`Narration split into ${chunks.length} chunks`);
+                        textsToNarrate.push(...chunks);
                     }
 
                     if (atmosphere && typeof atmosphere === 'string') {
-                        const paragraphs = atmosphere.split('\n\n').filter(p => p.trim().length > 0);
-                        logger.info(`Atmosphere split into ${paragraphs.length} paragraphs`);
-                        textsToNarrate.push(...paragraphs);
+                        const chunks = splitTextIntoChunks(atmosphere);
+                        logger.info(`Atmosphere split into ${chunks.length} chunks`);
+                        textsToNarrate.push(...chunks);
                     }
 
                     // Filter out any empty strings and validate
@@ -1134,17 +1194,17 @@ WORLD PARAMETERS:
 - Player Name: ${playerName} (Should not use in the world context)
 
 REQUIRED ELEMENTS:
-1. World Context (1000 words):
+1. World Context (MIN 200 words - MAX 500 words):
    - Brief overview of the world's history
    - Current state of civilization
    - Major powers and conflicts
 
-2. Narration (500 words):
+2. Narration (MIN 100 words - MAX 200 words):
    - Vivid description of the immediate surroundings
    - Notable landmarks and features
    - Current events and situations
 
-3. Atmosphere (100 words):
+3. Atmosphere (MIN 50 words - MAX 100 words):
    - Current weather and time of day
    - Mood and emotional tone
    - Sensory details (sounds, smells, etc.)
@@ -1160,9 +1220,9 @@ You must respond with ONLY a valid JSON object. No additional text, no explanati
 The response must be a single JSON object with the following structure:
 
 ${language === 'en-US' ? `{
-    "world_context": "Your detailed world context here",
-    "narration": "Your vivid narration here",
-    "atmosphere": "Your atmospheric description here",
+    "world_context": "Your detailed world context here with no less than 200 words and no more than 500 words",
+    "narration": "Your vivid narration here with no less than 100 words and no more than 200 words",
+    "atmosphere": "Your atmospheric description here with no less than 50 words and no more than 100 words",
     "available_actions": [
         "First specific action",
         "Second specific action",
@@ -1171,9 +1231,9 @@ ${language === 'en-US' ? `{
         "Fifth specific action"
     ]
 }` : `{
-    "contexto_mundo": "Seu contexto detalhado do mundo aqui",
-    "narracao": "Sua narração vívida aqui",
-    "atmosfera": "Sua descrição atmosférica aqui",
+    "contexto_mundo": "Seu contexto detalhado do mundo aqui com no mínimo 200 palavras e no máximo 500 palavras",
+    "narracao": "Sua narração vívida aqui com no mínimo 100 palavras e no máximo 200 palavras",
+    "atmosfera": "Sua descrição atmosférica aqui com no mínimo 50 palavras e no máximo 100 palavras",
     "acoes_disponiveis": [
         "Primeira ação específica",
         "Segunda ação específica",

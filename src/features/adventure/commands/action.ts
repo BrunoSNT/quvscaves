@@ -213,10 +213,68 @@ const EMOJI_MAP: Record<string, string> = {
 };
 
 function splitIntoSentences(text: string): string[] {
-    // Split on periods, exclamation marks, or question marks followed by spaces or end of string
-    return text.split(/(?<=[.!?])\s+|\s*$/)
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
+    // First split into paragraphs
+    const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0);
+    
+    const sentences: string[] = [];
+    for (const paragraph of paragraphs) {
+        // Split on sentence boundaries while preserving punctuation
+        const sentencesInParagraph = paragraph
+            .split(/(?<=[.!?])\s+/)
+            .map(s => s.trim())
+            .filter(s => s.length > 0);
+            
+        // If a sentence is too long, split it into smaller chunks
+        for (const sentence of sentencesInParagraph) {
+            if (sentence.length > 500) {
+                // Split long sentences at commas or other natural breaks
+                const chunks = sentence
+                    .split(/(?<=[,;:])\s+/)
+                    .map(chunk => chunk.trim())
+                    .filter(chunk => chunk.length > 0);
+                    
+                sentences.push(...chunks);
+            } else {
+                sentences.push(sentence);
+            }
+        }
+    }
+    
+    return sentences;
+}
+
+class PromiseHandler {
+    private resolveStarted: ((value: void | PromiseLike<void>) => void) | undefined;
+    private rejectStarted: ((reason: any) => void) | undefined;
+    private resolveFinished: ((value: void | PromiseLike<void>) => void) | undefined;
+    private rejectFinished: ((reason: any) => void) | undefined;
+    public startedPlaying: Promise<void>;
+    public finished: Promise<void>;
+
+    constructor() {
+        this.startedPlaying = new Promise<void>((resolve, reject) => {
+            this.resolveStarted = resolve;
+            this.rejectStarted = reject;
+        });
+
+        this.finished = new Promise<void>((resolve, reject) => {
+            this.resolveFinished = resolve;
+            this.rejectFinished = reject;
+        });
+    }
+
+    resolveStart() {
+        if (this.resolveStarted) this.resolveStarted();
+    }
+
+    resolveFinish() {
+        if (this.resolveFinished) this.resolveFinished();
+    }
+
+    reject(error: any) {
+        if (this.rejectStarted) this.rejectStarted(error);
+        if (this.rejectFinished) this.rejectFinished(error);
+    }
 }
 
 // @ts-ignore - Discord.js types issue with VoiceChannel
@@ -240,137 +298,66 @@ async function playNarration(channel: GuildVoiceChannelResolvable, texts: string
         const player = createAudioPlayer();
         connection.subscribe(player);
 
-        // Split texts into sentences
-        const narrationSentences = texts[0] ? splitIntoSentences(texts[0]) : [];
-        const atmosphereSentences = texts[1] ? splitIntoSentences(texts[1]) : [];
-        
-        // Combine all sentences, keeping track of which are narration vs atmosphere
-        const allSentences = [
-            ...narrationSentences.map(s => ({ text: s, type: 'narration' })),
-            ...atmosphereSentences.map(s => ({ text: s, type: 'atmosphere' }))
-        ];
+        // Combine texts into complete paragraphs
+        const narrationText = texts[0] || '';
+        const atmosphereText = texts[1] || '';
 
-        let startedPlayingResolveFn: (() => void) | null = null;
-        let finishedResolveFn: (() => void) | null = null;
-        let startedPlayingRejectFn: ((error: Error) => void) | null = null;
-        let finishedRejectFn: ((error: Error) => void) | null = null;
-
-        const startedPlaying = new Promise<void>((resolve, reject) => {
-            startedPlayingResolveFn = resolve;
-            startedPlayingRejectFn = reject;
-        });
-
-        const finished = new Promise<void>((resolve, reject) => {
-            finishedResolveFn = resolve;
-            finishedRejectFn = reject;
-        });
-
-        let currentIndex = 0;
         let hasStartedPlaying = false;
-        let nextBuffer: Buffer | null = null;
-        let isProcessingNext = false;
+        const promiseHandler = new PromiseHandler();
 
-        const requestNextSentence = async () => {
-            if (currentIndex + 1 >= allSentences.length || isProcessingNext) return;
-            
-            isProcessingNext = true;
-            const nextSentence = allSentences[currentIndex + 1];
-            try {
-                nextBuffer = await voiceService.speak(nextSentence.text, config);
-            } catch (error) {
-                logger.error(`Error pre-processing next sentence: ${nextSentence.text}`, error);
-                nextBuffer = null;
-            }
-            isProcessingNext = false;
-        };
+        try {
+            // Generate audio for both texts in parallel
+            const [narrationBuffer, atmosphereBuffer] = await Promise.all([
+                narrationText ? voiceService.speak(narrationText, config) : null,
+                atmosphereText ? voiceService.speak(atmosphereText, config) : null
+            ]);
 
-        const playNextSentence = async () => {
-            if (currentIndex >= allSentences.length) {
-                finishedResolveFn?.();
-                return;
-            }
-
-            const { text } = allSentences[currentIndex];
-            try {
-                let buffer: Buffer | null;
-                
-                // Use pre-fetched buffer if available
-                if (currentIndex > 0 && nextBuffer) {
-                    buffer = nextBuffer;
-                    nextBuffer = null;
-                } else {
-                    buffer = await voiceService.speak(text, config);
-                }
-
-                if (!buffer) {
-                    currentIndex++;
-                    return playNextSentence();
-                }
-
-                const stream = Readable.from(buffer);
+            // Play narration
+            if (narrationBuffer) {
+                const stream = Readable.from(narrationBuffer);
                 const resource = createAudioResource(stream);
                 player.play(resource);
 
                 if (!hasStartedPlaying) {
                     hasStartedPlaying = true;
-                    startedPlayingResolveFn?.();
+                    promiseHandler.resolveStart();
                 }
 
-                // Start requesting next sentence as soon as current starts playing
-                requestNextSentence();
-                
-                currentIndex++;
-            } catch (error) {
-                logger.error(`Error processing sentence: ${text}`, error);
-                currentIndex++;
-                return playNextSentence();
+                // Wait for narration to finish
+                await new Promise<void>((resolve) => {
+                    player.once(AudioPlayerStatus.Idle, resolve);
+                });
             }
-        };
 
-        player.on(AudioPlayerStatus.Playing, () => {
-            // Start processing next sentence as soon as current starts playing
-            requestNextSentence();
-        });
+            // Play atmosphere
+            if (atmosphereBuffer) {
+                const stream = Readable.from(atmosphereBuffer);
+                const resource = createAudioResource(stream);
+                player.play(resource);
 
-        player.on(AudioPlayerStatus.Idle, () => {
-            if (currentIndex < allSentences.length) {
-                playNextSentence();
-            } else {
-                finishedResolveFn?.();
-                connection.destroy();
+                // Wait for atmosphere to finish
+                await new Promise<void>((resolve) => {
+                    player.once(AudioPlayerStatus.Idle, resolve);
+                });
             }
-        });
 
-        player.on('error', (error:any) => {
-            logger.error('Error in audio player:\n' + error);
-            if (!hasStartedPlaying) {
-                startedPlayingRejectFn?.(error);
-            }
-            finishedRejectFn?.(error);
+            // All audio has finished playing
+            promiseHandler.resolveFinish();
             connection.destroy();
-        });
 
-        // Handle connection state changes
-        connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            try {
-                await Promise.race([
-                    entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-                    entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-                ]);
-                // Seems to be reconnecting to a new channel - ignore disconnect
-            } catch (error) {
-                // Seems to be a real disconnect which SHOULDN'T be recovered from
-                connection.destroy();
-                finishedResolveFn?.();
-            }
-        });
+        } catch (error) {
+            logger.error('Error during audio playback:', error);
+            promiseHandler.reject(error);
+            connection.destroy();
+            throw error;
+        }
 
-        // Start playing the first sentence
-        await playNextSentence();
-
-        return { startedPlaying, finished };
+        return {
+            startedPlaying: promiseHandler.startedPlaying,
+            finished: promiseHandler.finished
+        };
     } catch (error) {
-        logger.error('Error in playNarration:\n' + error);
+        logger.error('Error in playNarration:', error);
         throw error;
     }
 }

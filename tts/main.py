@@ -202,23 +202,23 @@ async def text_to_speech(request: TTSRequest):
         engine = tts_pools[lang_code].get_next_engine()
 
         try:
-            # Normalize text by replacing newlines with spaces and trimming
-            normalized_text = " ".join(request.text.split())
-            logger.info(f"Generating audio for text: {normalized_text[:100]}...")
-
-            # Generate audio in a thread pool
-            audio_future = thread_pool.submit(
+            # Process the entire text as one chunk
+            logger.info(f"Generating audio for text: {request.text[:100]}...")
+            
+            # Generate audio directly without chunking
+            audio_data = await asyncio.get_event_loop().run_in_executor(
+                None,
                 engine.generate,
-                normalized_text,
+                request.text,
                 request.voice,
                 request.speed or 1.0
             )
 
+            if not audio_data:
+                raise HTTPException(status_code=500, detail="Failed to generate audio")
+
             async def generate_audio():
                 try:
-                    audio_data = await asyncio.get_event_loop().run_in_executor(
-                        None, audio_future.result
-                    )
                     yield audio_data
                     logger.info(f"Completed audio generation")
                 except Exception as e:
@@ -226,7 +226,7 @@ async def text_to_speech(request: TTSRequest):
                     raise
 
             # Move TTS metadata to HTTP response headers
-            encoded_text = base64.b64encode(normalized_text.encode("utf-8")).decode("ascii")
+            encoded_text = base64.b64encode(request.text.encode("utf-8")).decode("ascii")
             response_headers = {
                 "X-TTS-Text-Base64": encoded_text,
                 "X-TTS-Voice": request.voice
