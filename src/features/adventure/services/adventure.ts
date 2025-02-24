@@ -53,7 +53,7 @@ export class AdventureService {
             logger.info(`Created adventure ${adventure.id} for user ${userId}`);
             return this.mapToAdventure(adventure);
         } catch (error) {
-            logger.error('Error creating adventure:', error);
+            logger.error('Error creating adventure:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

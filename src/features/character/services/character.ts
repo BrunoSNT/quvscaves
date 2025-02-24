@@ -44,7 +44,7 @@ export class DefaultCharacterService implements CharacterService {
             logger.info(`Created character ${character.id} for user ${userId}`);
             return this.mapToCharacter(character);
         } catch (error) {
-            logger.error('Error creating character:', error);
+            logger.error('Error creating character:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

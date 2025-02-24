@@ -1,5 +1,5 @@
 import { VoiceService, VoiceConfig } from '../types';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 import axios from 'axios';
 
 export class DefaultVoiceService implements VoiceService {
@@ -18,7 +18,7 @@ export class DefaultVoiceService implements VoiceService {
                     throw new Error('Unsupported voice provider');
             }
         } catch (error) {
-            logger.error('Error in voice service:', error);
+            logger.error('Error in voice service:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -34,7 +34,7 @@ export class DefaultVoiceService implements VoiceService {
             try {
                 await connection.disconnect();
             } catch (error) {
-                logger.error('Error disconnecting voice:', error);
+                logger.error('Error disconnecting voice:' + formatGenericOutput(JSON.stringify(error)));
             }
         }
         this.voiceConnections.clear();
@@ -42,7 +42,7 @@ export class DefaultVoiceService implements VoiceService {
 
     private async elevenLabsSpeak(text: string, config: VoiceConfig): Promise<Buffer> {
         const response = await axios.post(
-            `https://api.elevenlabs.io/v1/text-to-speech/${config.voiceId}`,
+            `https://api.elevenlabs.io/v1/text-to-speech/123`,
             {
                 text,
                 voice_settings: {
@@ -53,7 +53,7 @@ export class DefaultVoiceService implements VoiceService {
             },
             {
                 headers: {
-                    'xi-api-key': config.apiKey || config.ELEVENLABS_API_KEY,
+                    'xi-api-key': config.ELEVENLABS_API_KEY || config.ELEVENLABS_API_KEY,
                     'Content-Type': 'application/json',
                     'Accept': 'audio/mpeg'
                 },

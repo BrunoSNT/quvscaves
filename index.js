@@ -39,7 +39,7 @@ client.once(Events.ClientReady, async (c) => {
             { body: commands },
         );
     } catch (error) {
-        console.error('Error registering commands:', error);
+        console.error('Error registering commands:' + formatGenericOutput(JSON.stringify(error)));
     }
 });
 
@@ -86,7 +86,7 @@ client.on(Events.InteractionCreate, async interaction => {
             });
 
         } catch (error) {
-            console.error('Error linking wallet:', error);
+            console.error('Error linking wallet:' + formatGenericOutput(JSON.stringify(error)));
             await interaction.reply({
                 content: 'There was an error linking your wallet. Please try again later.',
                 flags: MessageFlags.Ephemeral
@@ -108,10 +108,10 @@ client.on(Events.MessageCreate, async message => {
 
 // Error handling
 client.on('error', error => {
-    console.error('Discord client error:', error);
+    console.error('Discord client error:' + formatGenericOutput(JSON.stringify(error)));
 });
 
 // Login
 client.login(process.env.DISCORD_TOKEN).catch(error => {
-    console.error('Failed to login:', error);
+    console.error('Failed to login:' + formatGenericOutput(JSON.stringify(error)));
 }); 

@@ -3,6 +3,7 @@ import { DefaultWalletService } from '../services/wallet';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
+import { formatGenericOutput } from '../../../shared/logger';
 
 const walletService = new DefaultWalletService();
 
@@ -34,7 +35,7 @@ export async function handleLinkWallet(interaction: ChatInputCommandInteraction)
 
         logger.info(`Wallet linked for user ${interaction.user.id}`);
     } catch (error: any) {
-        logger.error('Error in link wallet command:', error);
+        logger.error('Error in link wallet command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: error.message || translate('errors.generic'),
             flags: MessageFlags.Ephemeral

@@ -5,6 +5,7 @@ import { logger } from '../shared/logger';
 import { config } from '../core/config';
 import axios from 'axios';
 import { SkillCheck, DifficultyClass } from '../shared/game/skills';
+import { formatGenericOutput } from '../shared/logger';
 
 interface SkillAnalysis {
     requiresCheck: boolean;
@@ -264,7 +265,7 @@ Analyze this action for required skill checks.
                 disadvantage: analysis.disadvantage || false
             };
         } catch (error) {
-            logger.error('Error parsing LLM response:', error);
+            logger.error('Error parsing LLM response:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }

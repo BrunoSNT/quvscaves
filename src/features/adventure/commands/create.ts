@@ -17,7 +17,7 @@ import {
     VoiceChannel
 } from 'discord.js';
 import { EmbedBuilder } from 'discord.js';
-import { logger, prettyPrintLog } from '../../../shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from '../../../shared/logger';
 import { VoiceType, WorldStyle, ToneStyle, MagicLevel, AdventurePrivacy, RollMode } from '../../../shared/game/types';
 import { prisma } from '../../../core/prisma';
 import { createCategoryChannel, createTextChannel, createPlayerChannels } from '../../../shared/discord/channels';
@@ -633,8 +633,8 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     const response = await gameMaster.generateResponse({
                         ...context,
                         playerActions: [language === 'pt-BR' 
-                            ? 'Descrição vívida e detalhada do mundo incorporando todos os elementos necessários.'
-                            : 'Vivid and detailed world description incorporating all required elements.'],
+                            ? 'Descrição vívida e detalhada do mundo incorporando todos os elementos necessários. Seguindo todas as regras de mundo e contexto. Principalmente as de minimos de linhas, caracteres e parágrafos. Que são para o contexto do mundo minimo de 500 palavras, 3 parágrafos, 440 caracteres por parágrafo MAX separados por quebras de linha.'
+                            : 'Vivid and detailed world description incorporating all required elements. Following all world and context rules. Especially the minimum lines, characters, and paragraphs. Which are for the world context minimum of 500 words, 3 paragraphs, 440 characters per paragraph MAX separated by new lines.'],
                         memory: {
                             recentScenes: [],
                             activeQuests: [],
@@ -750,7 +750,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                         });
                         logger.info('Narrative embed sent');
                     } catch (error) {
-                        logger.error('Error sending embeds:', error);
+                        logger.error('Error sending embeds:' + formatGenericOutput(JSON.stringify(error)));
                         throw error;
                     }
 
@@ -774,7 +774,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                     await finished;
 
                 } catch (error) {
-                    logger.error('Error in collector:', error);
+                    logger.error('Error in collector:' + formatGenericOutput(JSON.stringify(error)));
                     try {
                         if (i.deferred) {
                             await i.editReply({
@@ -791,7 +791,7 @@ export async function handleCreateAdventure(interaction: ChatInputCommandInterac
                             });
                         }
                     } catch (replyError) {
-                        logger.error('Error sending error message:', replyError);
+                        logger.error('Error sending error message:' + formatGenericOutput(JSON.stringify(replyError)));
                     }
                 }
             });
@@ -1194,17 +1194,17 @@ WORLD PARAMETERS:
 - Player Name: ${playerName} (Should not use in the world context)
 
 REQUIRED ELEMENTS:
-1. World Context (MIN 200 words - MAX 500 words):
+1. World Context (MIN 200 words - MAX 500 words, MIN 3 paragraphs, 440 characters per paragraph MAX separated by new lines):
    - Brief overview of the world's history
    - Current state of civilization
    - Major powers and conflicts
 
-2. Narration (MIN 100 words - MAX 200 words):
+2. Narration (MIN 100 words - MAX 200 words, MIN 3 paragraphs, 440 characters per paragraph MAX separated by new lines):
    - Vivid description of the immediate surroundings
    - Notable landmarks and features
    - Current events and situations
 
-3. Atmosphere (MIN 50 words - MAX 100 words):
+3. Atmosphere (MIN 50 words - MAX 100 words, 440 characters per paragraph):
    - Current weather and time of day
    - Mood and emotional tone
    - Sensory details (sounds, smells, etc.)
@@ -1220,9 +1220,9 @@ You must respond with ONLY a valid JSON object. No additional text, no explanati
 The response must be a single JSON object with the following structure:
 
 ${language === 'en-US' ? `{
-    "world_context": "Your detailed world context here with no less than 200 words and no more than 500 words",
-    "narration": "Your vivid narration here with no less than 100 words and no more than 200 words",
-    "atmosphere": "Your atmospheric description here with no less than 50 words and no more than 100 words",
+    "world_context": "Your detailed world context here with no less than 500 words and no more than 1000 words, MIN 3 paragraphs, 440 characters per paragraph MAX separated by new lines",
+    "narration": "Your vivid narration here with no less than 100 words and no more than 200 words, MIN 3 paragraphs, 440 characters per paragraph MAX separated by new lines",
+    "atmosphere": "Your atmospheric description here with no less than 50 words and no more than 100 words, 440 characters per paragraph",
     "available_actions": [
         "First specific action",
         "Second specific action",
@@ -1231,9 +1231,9 @@ ${language === 'en-US' ? `{
         "Fifth specific action"
     ]
 }` : `{
-    "contexto_mundo": "Seu contexto detalhado do mundo aqui com no mínimo 200 palavras e no máximo 500 palavras",
-    "narracao": "Sua narração vívida aqui com no mínimo 100 palavras e no máximo 200 palavras",
-    "atmosfera": "Sua descrição atmosférica aqui com no mínimo 50 palavras e no máximo 100 palavras",
+    "contexto_mundo": "Seu contexto detalhado do mundo aqui com no mínimo 500 palavras e no máximo 1000 palavras, MIN 3 parágrafos, 440 caracteres por parágrafo MAX separados por quebras de linha",
+    "narracao": "Sua narração vívida aqui com no mínimo 100 palavras e no máximo 200 palavras, MIN 3 parágrafos, 440 caracteres por parágrafo MAX separados por quebras de linha",
+    "atmosfera": "Sua descrição atmosférica aqui com no mínimo 50 palavras e no máximo 100 palavras, 440 caracteres por parágrafo",
     "acoes_disponiveis": [
         "Primeira ação específica",
         "Segunda ação específica",
@@ -1359,7 +1359,7 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
                     entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                 ]);
             } catch (error) {
-                logger.error('Connection destroyed due to error:', error);
+                logger.error('Connection destroyed due to error:' + formatGenericOutput(JSON.stringify(error)));
                 startedPlayingReject(error);
                 finishedReject(error);
                 connection.destroy();
@@ -1367,7 +1367,7 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
         });
 
         connection.on('error', (error) => {
-            logger.error('Voice connection error:', error);
+            logger.error('Voice connection error:' + formatGenericOutput(JSON.stringify(error)));
             startedPlayingReject(error);
             finishedReject(error);
         });
@@ -1377,7 +1377,7 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
         
         // Add player state logging
         player.on('error', error => {
-            logger.error('Audio player error:', error);
+            logger.error('Audio player error:' + formatGenericOutput(JSON.stringify(error)));
             startedPlayingReject(error);
             finishedReject(error);
         });
@@ -1446,7 +1446,7 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
             finishedResolve();
 
         } catch (error) {
-            logger.error('Error during audio playback:', error);
+            logger.error('Error during audio playback:' + formatGenericOutput(JSON.stringify(error)));
             startedPlayingReject(error);
             finishedReject(error);
             throw error;
@@ -1454,7 +1454,7 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
 
         return { startedPlaying, finished };
     } catch (error) {
-        logger.error('Error in playNarration:', error);
+        logger.error('Error in playNarration:' + formatGenericOutput(JSON.stringify(error)));
         throw error;
     }
 } 

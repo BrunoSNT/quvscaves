@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { logger } from '../shared/logger';
+import { logger, formatGenericOutput } from '../shared/logger';
 
 interface QwenOptions {
     temperature?: number;
@@ -33,10 +33,10 @@ export class QwenClient {
                 return response.data.response;
             }
 
-            logger.error('Invalid Qwen response format:', response.data);
+            logger.error('Invalid Qwen response format:' + formatGenericOutput(JSON.stringify(response.data)));
             throw new Error('Invalid response format from Qwen');
         } catch (error) {
-            logger.error('Error in Qwen completion:', error);
+            logger.error('Error in Qwen completion:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

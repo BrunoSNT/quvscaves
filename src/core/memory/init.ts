@@ -1,5 +1,5 @@
 import { prisma } from '../prisma';
-import { logger } from '../../shared/logger';
+import { logger, formatGenericOutput } from '../../shared/logger';
 import { ProceduralMemory } from './types';
 
 const defaultPrompts: Omit<ProceduralMemory, 'id'>[] = [
@@ -122,7 +122,7 @@ export async function initializeMemorySystem() {
 
         logger.info('Successfully initialized memory system with default values');
     } catch (error) {
-        logger.error('Error initializing memory system:', error);
+        logger.error('Error initializing memory system:' + formatGenericOutput(JSON.stringify(error)));
         throw error;
     }
 } 

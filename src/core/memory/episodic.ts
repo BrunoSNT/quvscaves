@@ -1,6 +1,6 @@
 import { EpisodicMemory, EpisodicMemoryManager } from './types';
 import { VectorStore } from '../vector/store';
-import { logger } from '../../shared/logger';
+import { logger, formatGenericOutput } from '../../shared/logger';
 import { config } from '../config';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -57,7 +57,7 @@ export class EpisodicMemoryManagerImpl implements EpisodicMemoryManager {
 
             logger.info(`Added episodic memory ${id}`);
         } catch (error) {
-            logger.error('Error adding episodic memory:', error);
+            logger.error('Error adding episodic memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -72,7 +72,7 @@ export class EpisodicMemoryManagerImpl implements EpisodicMemoryManager {
                 .filter((memory): memory is EpisodicMemory => memory !== undefined)
                 .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
         } catch (error) {
-            logger.error('Error searching episodic memories:', error);
+            logger.error('Error searching episodic memories:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

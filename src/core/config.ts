@@ -86,7 +86,7 @@ function validateEnv(): Config {
             knowledge
         });
     } catch (error) {
-        console.error('Invalid configuration:', error);
+        console.error('Invalid configuration:' + formatGenericOutput(JSON.stringify(error)));
         process.exit(1);
     }
 }

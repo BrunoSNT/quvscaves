@@ -43,7 +43,7 @@ export async function handleHelp(interaction: ChatInputCommandInteraction) {
 
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     } catch (error) {
-        logger.error('Error in help command:', error);
+        logger.error('Error in help command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

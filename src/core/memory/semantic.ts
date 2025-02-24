@@ -4,6 +4,7 @@ import { logger } from '../../shared/logger';
 import { config } from '../config';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import { formatGenericOutput } from '../../shared/logger';
 
 export class SemanticMemoryManagerImpl implements SemanticMemoryManager {
     private vectorStore: VectorStore;
@@ -45,7 +46,7 @@ export class SemanticMemoryManagerImpl implements SemanticMemoryManager {
 
             logger.info(`Added knowledge memory ${id} from source ${memory.source}`);
         } catch (error) {
-            logger.error('Error adding knowledge memory:', error);
+            logger.error('Error adding knowledge memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -73,7 +74,7 @@ export class SemanticMemoryManagerImpl implements SemanticMemoryManager {
 
             logger.info(`Added grounding memory ${id} from source ${memory.source}`);
         } catch (error) {
-            logger.error('Error adding grounding memory:', error);
+            logger.error('Error adding grounding memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -87,7 +88,7 @@ export class SemanticMemoryManagerImpl implements SemanticMemoryManager {
                 .map(result => this.memories.get(result.id))
                 .filter((memory): memory is SemanticMemory => memory !== undefined);
         } catch (error) {
-            logger.error('Error searching semantic memories:', error);
+            logger.error('Error searching semantic memories:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -128,7 +129,7 @@ export class SemanticMemoryManagerImpl implements SemanticMemoryManager {
 
             logger.info('Successfully synced with Notion');
         } catch (error) {
-            logger.error('Error syncing with Notion:', error);
+            logger.error('Error syncing with Notion:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

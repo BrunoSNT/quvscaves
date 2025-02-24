@@ -32,7 +32,7 @@ export async function handleSetLanguage(interaction: ChatInputCommandInteraction
 
         logger.info(`Language updated for user ${interaction.user.id} to ${language}`);
     } catch (error) {
-        logger.error('Error in set language command:', error);
+        logger.error('Error in set language command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

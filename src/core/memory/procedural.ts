@@ -1,5 +1,5 @@
 import { ProceduralMemory, ProceduralMemoryManager } from './types';
-import { logger } from '../../shared/logger';
+import { logger, formatGenericOutput } from '../../shared/logger';
 import { v4 as uuidv4 } from 'uuid';
 
 export class ProceduralMemoryManagerImpl implements ProceduralMemoryManager {
@@ -20,7 +20,7 @@ export class ProceduralMemoryManagerImpl implements ProceduralMemoryManager {
             this.prompts.set(id, prompt);
             logger.info(`Registered prompt ${id}: ${prompt.name}`);
         } catch (error) {
-            logger.error('Error registering prompt:', error);
+            logger.error('Error registering prompt:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -34,7 +34,7 @@ export class ProceduralMemoryManagerImpl implements ProceduralMemoryManager {
             this.tools.set(id, tool);
             logger.info(`Registered tool ${id}: ${tool.name}`);
         } catch (error) {
-            logger.error('Error registering tool:', error);
+            logger.error('Error registering tool:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

@@ -45,7 +45,7 @@ export async function handleCharacterSettings(interaction: ChatInputCommandInter
 
         logger.info(`Displayed settings for character ${characterId}`);
     } catch (error) {
-        logger.error('Error in character settings command:', error);
+        logger.error('Error in character settings command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

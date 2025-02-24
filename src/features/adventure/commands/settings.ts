@@ -55,7 +55,7 @@ export async function handleAdventureSettings(interaction: ChatInputCommandInter
 
         logger.info(`Displayed settings for adventure ${adventureId}`);
     } catch (error) {
-        logger.error('Error in adventure settings command:', error);
+        logger.error('Error in adventure settings command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

@@ -30,11 +30,15 @@ logger = logging.getLogger(__name__)
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-device = torch.device("cpu")
+# Use CUDA if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
 
 # Suppress tqdm progress bars
 os.environ['TQDM_DISABLE'] = '1'
+
+# Increase thread pool size for better parallel processing
+thread_pool = ThreadPoolExecutor(max_workers=16)  # Increased from 8 to 16
 
 def check_dependencies():
     required_packages = {
@@ -89,6 +93,7 @@ class TTSEngine:
         self.voice = "af_heart" if lang_code == 'a' else 'pm_alex'
         self.lock = Lock()
         self.initialized = False
+        self.audio_queue = asyncio.Queue()
         logger.info(f"Initializing TTSEngine for language code '{lang_code}' with voice '{self.voice}'")
         self.initialize()
 
@@ -98,14 +103,16 @@ class TTSEngine:
 
         logger.info(f"Initializing Kokoro for language: {self.lang_code}...")
         try:
-            # Import kokoro directly
             import kokoro
             from kokoro import KPipeline
 
-            # Initialize with only supported arguments
+            # Initialize with optimized settings
             self.kokoro = KPipeline(
-                lang_code=self.lang_code, 
-                device=device
+                lang_code=self.lang_code,
+                device=device,
+                use_cache=False,
+                optimize_for_inference=True,
+                num_threads=4  # Use multiple threads for processing
             )
             self.initialized = True
             logger.info(f"Kokoro initialized successfully on device: {device} for language: {self.lang_code}")
@@ -113,29 +120,42 @@ class TTSEngine:
             logger.error(f"Failed to initialize Kokoro: {str(e)}", exc_info=True)
             raise RuntimeError(f"Failed to initialize Kokoro for language: {self.lang_code}")
 
+    async def generate_async(self, text: str, voice: str, speed: float) -> bytes:
+        return await asyncio.get_event_loop().run_in_executor(
+            thread_pool,
+            self.generate,
+            text,
+            voice,
+            speed
+        )
+
     def generate(self, text: str, voice: str, speed: float) -> bytes:
         with self.lock:
             try:
                 if not self.initialized:
                     self.initialize()
 
-                # Generate audio in chunks
-                audio_chunks = []
-                for _, _, audio in self.kokoro(text, speed=speed, voice=voice):
-                    if audio is not None:
-                        buffer = io.BytesIO()
-                        sf.write(buffer, audio.cpu().numpy(), self.sample_rate, format='WAV')
-                        buffer.seek(0)
-                        audio_chunks.append(buffer.read())
+                buffer = io.BytesIO()
                 
-                # Combine all chunks into a single audio buffer
-                return b''.join(audio_chunks)
+                # Generate audio with optimized settings
+                for _, _, audio in self.kokoro(
+                    text,
+                    speed=speed,
+                    voice=voice,
+                    use_fast_inference=True,
+                    batch_size=1
+                ):
+                    if audio is not None:
+                        sf.write(buffer, audio.cpu().numpy(), self.sample_rate, format='WAV')
+                
+                buffer.seek(0)
+                return buffer.read()
             except Exception as e:
                 logger.error(f"Error generating audio: {str(e)}", exc_info=True)
                 raise
 
 class TTSEnginePool:
-    def __init__(self, lang_code: str, pool_size: int = 2):
+    def __init__(self, lang_code: str, pool_size: int = 4):  # Increased from 2 to 4
         self.engines = []
         self.current_engine = 0
         self.lock = Lock()
@@ -147,7 +167,7 @@ class TTSEnginePool:
             except Exception as e:
                 logger.error(f"Failed to initialize engine {len(self.engines) + 1}: {str(e)}")
                 if len(self.engines) == 0:
-                    raise  # Re-raise if we couldn't initialize any engines
+                    raise
         
         logger.info(f"Initialized {len(self.engines)} engines for language {lang_code}")
 
@@ -179,9 +199,6 @@ def initialize_engine_pools(retries=3, delay=2):
 logger.info("Initializing TTS engine pools...")
 tts_pools = initialize_engine_pools()
 
-# Thread pool for parallel processing
-thread_pool = ThreadPoolExecutor(max_workers=4)
-
 app = FastAPI()
 
 @app.get("/health")
@@ -198,17 +215,11 @@ async def text_to_speech(request: TTSRequest):
             logger.error(f"Unsupported language code: {lang_code}")
             raise HTTPException(status_code=400, detail=f"Unsupported language for voice: {request.voice}")
 
-        # Get the next available engine from the pool
         engine = tts_pools[lang_code].get_next_engine()
 
         try:
-            # Process the entire text as one chunk
-            logger.info(f"Generating audio for text: {request.text[:100]}...")
-            
-            # Generate audio directly without chunking
-            audio_data = await asyncio.get_event_loop().run_in_executor(
-                None,
-                engine.generate,
+            # Process the request asynchronously
+            audio_data = await engine.generate_async(
                 request.text,
                 request.voice,
                 request.speed or 1.0
@@ -229,10 +240,15 @@ async def text_to_speech(request: TTSRequest):
             encoded_text = base64.b64encode(request.text.encode("utf-8")).decode("ascii")
             response_headers = {
                 "X-TTS-Text-Base64": encoded_text,
-                "X-TTS-Voice": request.voice
+                "X-TTS-Voice": request.voice,
+                "X-TTS-Processing-Time": str(time.time())
             }
 
-            return StreamingResponse(generate_audio(), media_type="audio/wav", headers=response_headers)
+            return StreamingResponse(
+                generate_audio(),
+                media_type="audio/wav",
+                headers=response_headers
+            )
 
         except Exception as e:
             logger.error(f"Error in TTS generation: {str(e)}", exc_info=True)

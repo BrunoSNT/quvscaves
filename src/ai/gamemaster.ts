@@ -1,6 +1,6 @@
 import { GameContext } from '../shared/game/types';
 import { SupportedLanguage } from '../shared/i18n/types';
-import { logger, prettyPrintLog } from '../shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from '../shared/logger';
 import { buildContextString, getGamePrompt, createFallbackResponse } from '../shared/game/prompts';
 import { Orchestrator } from './orchestrator';
 import { config } from '../core/config';
@@ -56,7 +56,7 @@ export class GameMaster {
 
             return skillCheck;
         } catch (error) {
-            logger.error('Error determining skill check:', error);
+            logger.error('Error determining skill check:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }
@@ -85,30 +85,20 @@ export class GameMaster {
                         logger.info('Successfully generated valid response');
                         return response;
                     } catch (parseError) {
-                        logger.error('Response validation failed: ' + {
-                            error: parseError,
-                            response: response.substring(0, 200) + '...'
-                        });
+                        logger.error('Response validation failed: ' + formatGenericOutput(JSON.stringify(parseError)));
                         throw parseError;
                     }
                 }
                 retryCount++;
             } catch (error) {
                 lastError = error as Error;
-                logger.error(`Error generating response (attempt ${retryCount + 1}):`, {
-                    error: error instanceof Error ? error.message : error,
-                    retryCount,
-                    maxRetries: this.maxRetries
-                });
+                logger.error(`Error generating response (attempt ${retryCount + 1}):` + formatGenericOutput(JSON.stringify(error)));
                 retryCount++;
             }
         }
 
         // If all retries failed, return a fallback response
-        logger.error('All response generation attempts failed: ' + {
-            error: lastError?.message,
-            totalAttempts: retryCount
-        });
+        logger.error('All response generation attempts failed: ' + formatGenericOutput(JSON.stringify(lastError)));
         return createFallbackResponse(context.language);
     }
 
@@ -121,7 +111,7 @@ export class GameMaster {
         try {
             // Get enhanced context from orchestrator
             const enhancedContext = await this.orchestrator.getEnhancedContext(context).catch(error => {
-                logger.warn('Error getting enhanced context:', error);
+                logger.warn('Error getting enhanced context:' + formatGenericOutput(JSON.stringify(error)));
                 return context; // Fallback to original context
             });
             
@@ -173,7 +163,7 @@ ${context.playerActions[0]}
                 frequencyPenalty,
                 isSceneStagnating,
                 retryCount
-            })) + "\n\n");
+            })) + "\n\n" + fullPrompt + "\n\n");
 
             spinner.start();
             
@@ -191,11 +181,7 @@ ${context.playerActions[0]}
             });
 
             // Log the raw response content before any processing
-            logger.info('Raw AI Response Content:' + {
-                responseType: typeof response.data,
-                responseLength: typeof response.data === 'string' ? response.data.length : JSON.stringify(response.data).length,
-                rawContent: typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)
-            });
+            logger.info('Raw AI Response Content:' + prettyPrintLog(response.data.response));
 
             let responseContent: any;
             
@@ -205,33 +191,28 @@ ${context.playerActions[0]}
                     // Try to find a valid JSON object in the response
                     const jsonMatch = response.data.response.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
-                        logger.debug('Found JSON in response:', jsonMatch[0]);
+                        logger.debug('Found JSON in response:' + formatGenericOutput(JSON.stringify(jsonMatch[0])));
                         responseContent = JSON.parse(jsonMatch[0]);
-                        logger.debug('Parsed JSON content:', responseContent);
+                        logger.debug('Parsed JSON content:' + formatGenericOutput(JSON.stringify(responseContent)));
                     } else {
-                        logger.error('No JSON object found in response:', response.data.response);
+                        logger.error('No JSON object found in response:' + formatGenericOutput(JSON.stringify(response.data.response)));
                         throw new Error('No valid JSON found in response');
                     }
                 } else if (typeof response.data === 'string') {
                     const jsonMatch = response.data.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
-                        logger.debug('Found JSON in string response:', jsonMatch[0]);
+                        logger.debug('Found JSON in string response:' + formatGenericOutput(JSON.stringify(jsonMatch[0])));
                         responseContent = JSON.parse(jsonMatch[0]);
-                        logger.debug('Parsed JSON content:', responseContent);
+                        logger.debug('Parsed JSON content:' + formatGenericOutput(JSON.stringify(responseContent)));
                     } else {
-                        logger.error('No JSON object found in response string:', response.data);
+                        logger.error('No JSON object found in response string:' + formatGenericOutput(JSON.stringify(response.data)));
                         throw new Error('No valid JSON found in response');
                     }
                 }
 
                 // Validate response structure
                 if (!this.isValidResponse(responseContent, language as SupportedLanguage)) {
-                    logger.error('Invalid response structure: ' + {
-                        responseContent,
-                        expectedKeys: language === 'en-US' 
-                            ? ['narration', 'available_actions'] 
-                            : ['narracao', 'acoes_disponiveis']
-                    });
+                    logger.error('Invalid response structure: ' + formatGenericOutput(JSON.stringify(responseContent)));
                     throw new Error('Invalid response structure');
                 }
 
@@ -239,21 +220,21 @@ ${context.playerActions[0]}
                 try {
                     await this.orchestrator.processInput(context.playerActions[0], context);
                 } catch (error) {
-                    logger.warn('Error storing input memory:', error);
+                    logger.warn('Error storing input memory:' + formatGenericOutput(JSON.stringify(error)));
                     // Continue even if memory storage fails
                 }
 
                 try {
                     await this.orchestrator.storeResponse(JSON.stringify(responseContent), context);
                 } catch (error) {
-                    logger.warn('Error storing response memory:', error);
+                    logger.warn('Error storing response memory:' + formatGenericOutput(JSON.stringify(error)));
                     // Continue even if memory storage fails
                 }
 
                 spinner.stop();
                 return JSON.stringify(responseContent);
             } catch (error) {
-                logger.error('Error parsing AI response:', error);
+                logger.error('Error parsing AI response:' + formatGenericOutput(JSON.stringify(error)));
                 throw error;
             }
         } catch (error) {
@@ -456,7 +437,7 @@ ${chalk.cyan('Language:')} ${chalk.magenta(context.language)}
 
             return rewards;
         } catch (error) {
-            logger.error('Error determining rewards:', error);
+            logger.error('Error determining rewards:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }

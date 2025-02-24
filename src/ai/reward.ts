@@ -1,7 +1,7 @@
 import { HybridAnalyzer, AnalyzerConfig } from './analyzer';
 import { GameContext } from '../shared/game/types';
 import { GameReward } from '../shared/game/types';
-import { logger } from '../shared/logger';
+import { logger, formatGenericOutput } from '../shared/logger';
 
 const REWARD_CONCEPTS = [
     "chest", "treasure", "reward", "find", "discover", "obtain", "receive", "loot",
@@ -129,7 +129,7 @@ Determine appropriate rewards for this action.
             const parsed = JSON.parse(jsonMatch[0]);
             return parsed.rewards || null;
         } catch (error) {
-            logger.error('Error parsing LLM reward response:', error);
+            logger.error('Error parsing LLM reward response:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }

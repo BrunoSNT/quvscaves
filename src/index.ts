@@ -25,7 +25,7 @@ import { handleCreateAdventure } from './features/adventure/commands/create';
 import { handleRegister } from './features/user/commands/register';
 import { handleHelp } from './features/user/commands/help';
 import { handleLinkWallet } from './features/wallet/commands/link';
-import { logger, prettyPrintLog } from './shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from './shared/logger';
 import { handleButtonAction } from './features/adventure/commands/action';
 import { initializeMemorySystem } from './core/memory/init';
 import { VectorStore } from './core/vector/store';
@@ -230,7 +230,7 @@ client.once(Events.ClientReady, async (c) => {
         logger.info('Successfully registered application commands.');
 
     } catch (error) {
-        logger.error('Error registering commands:', error);
+        logger.error('Error registering commands:' + formatGenericOutput(JSON.stringify(error)));
     }
 });
 
@@ -261,7 +261,7 @@ client.on(Events.InteractionCreate, async interaction => {
                         logger.warn('Interaction expired before autocomplete could respond');
                         return;
                     }
-                    logger.error('Error in autocomplete response:', error);
+                    logger.error('Error in autocomplete response:' + formatGenericOutput(JSON.stringify(error)));
                 }
             };
 
@@ -564,7 +564,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 );
             }
         } catch (error) {
-            console.error('Error in autocomplete:', error);
+            console.error('Error in autocomplete:' + formatGenericOutput(JSON.stringify(error)));
             await interaction.respond([]);
         }
     }
@@ -587,7 +587,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 await handleRollAction(interaction);
             }
         } catch (error) {
-            logger.error('Error handling button interaction:', error);
+            logger.error('Error handling button interaction:' + formatGenericOutput(JSON.stringify(error)));
             const errorMessage = { 
                 content: 'There was an error processing your action.',
                 flags: 1 << 6 // MessageFlags.Ephemeral
@@ -661,7 +661,7 @@ client.on(Events.InteractionCreate, async interaction => {
                 break;
         }
     } catch (error) {
-        console.error('Error handling command:', error);
+        console.error('Error handling command:' + formatGenericOutput(JSON.stringify(error)));
         const errorMessage = 'There was an error executing this command.';
         if (interaction.replied || interaction.deferred) {
             await interaction.followUp({ content: errorMessage, flags: MessageFlags.Ephemeral });
@@ -679,7 +679,7 @@ process.on('SIGTERM', async () => {
         client.destroy();
         process.exit(0);
     } catch (error) {
-        logger.error('Error during shutdown:', error);
+        logger.error('Error during shutdown:' + formatGenericOutput(JSON.stringify(error)));
         process.exit(1);
     }
 });
@@ -691,7 +691,7 @@ process.on('SIGINT', async () => {
         client.destroy();
         process.exit(0);
     } catch (error) {
-        logger.error('Error during shutdown:', error);
+        logger.error('Error during shutdown:' + formatGenericOutput(JSON.stringify(error)));
         process.exit(1);
     }
 });
@@ -715,7 +715,7 @@ async function main() {
 
         client.login(process.env.DISCORD_TOKEN);
     } catch (error) {
-        logger.error('Error starting application:', error);
+        logger.error('Error starting application:' + formatGenericOutput(JSON.stringify(error)));
         process.exit(1);
     }
 }

@@ -25,7 +25,7 @@ export class DefaultUserService implements UserService {
             logger.info(`Registered user ${discordId} with username ${username}`);
             return user;
         } catch (error) {
-            logger.error('Error registering user:', error);
+            logger.error('Error registering user:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

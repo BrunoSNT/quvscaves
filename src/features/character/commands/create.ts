@@ -564,7 +564,7 @@ export async function handleCreateCharacter(interaction: ChatInputCommandInterac
         }
 
     } catch (error) {
-        console.error('Error creating character:', error);
+        console.error('Error creating character:' + formatGenericOutput(JSON.stringify(error)));
         if (interaction.deferred || interaction.replied) {
             await interaction.editReply({
                 content: 'Failed to create character. Please try again.',
@@ -693,7 +693,7 @@ export async function handleCharacterSetting(interaction: ChatInputCommandIntera
         });
 
     } catch (error) {
-        console.error('Error updating character setting:', error);
+        console.error('Error updating character setting:' + formatGenericOutput(JSON.stringify(error)));
         if (!interaction.replied) {
             await interaction.reply({
                 content: 'Failed to update character setting. Please try again.',

@@ -4,7 +4,7 @@ import { SemanticMemoryManagerImpl } from '../core/memory/semantic';
 import { WorkingMemoryManagerImpl } from '../core/memory/working';
 import { ProceduralMemoryManagerImpl } from '../core/memory/procedural';
 import { GameContext } from '../shared/game/types';
-import { logger } from '../shared/logger';
+import { logger, formatGenericOutput } from '../shared/logger';
 import { config } from '../core/config';
 import { deduplicateMemories } from '../features/adventure/utils/memory';
 import { VectorStore } from '../core/vector/store';
@@ -54,7 +54,7 @@ export class Orchestrator {
                     }
                 });
             } catch (error) {
-                logger.warn('Failed to store input in vector store:', error);
+                logger.warn('Failed to store input in vector store:' + formatGenericOutput(JSON.stringify(error)));
                 // Continue even if vector store fails
             }
 
@@ -84,7 +84,7 @@ export class Orchestrator {
 
             logger.debug('Successfully stored human memory');
         } catch (error) {
-            logger.error('Error storing human memory:', error);
+            logger.error('Error storing human memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -121,7 +121,7 @@ export class Orchestrator {
                 reasoning: recentReasoning
             };
         } catch (error) {
-            logger.error('Error getting enhanced context:', error);
+            logger.error('Error getting enhanced context:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -185,7 +185,7 @@ export class Orchestrator {
                     logger.debug('Successfully stored text in vector store');
                 }
             } catch (error) {
-                logger.warn('Failed to store response in vector store:', error);
+                logger.warn('Failed to store response in vector store:' + formatGenericOutput(JSON.stringify(error)));
                 // Continue even if vector store fails
             }
 
@@ -227,7 +227,7 @@ export class Orchestrator {
 
             logger.debug('Successfully stored scene memory');
         } catch (error) {
-            logger.error('Error storing scene memory:', error);
+            logger.error('Error storing scene memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -237,7 +237,7 @@ export class Orchestrator {
             await (this.memoryManager.semantic as SemanticMemoryManagerImpl).syncWithNotion();
             logger.info('Successfully synced knowledge base');
         } catch (error) {
-            logger.error('Error syncing knowledge base:', error);
+            logger.error('Error syncing knowledge base:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

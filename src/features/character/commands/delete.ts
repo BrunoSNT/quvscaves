@@ -53,7 +53,7 @@ export async function handleDeleteCharacter(interaction: ChatInputCommandInterac
             flags: MessageFlags.Ephemeral,
         });
     } catch (error) {
-        logger.error('Error in delete character command:', error);
+        logger.error('Error in delete character command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content:
                 'Failed to delete character: ' +

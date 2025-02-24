@@ -1,6 +1,6 @@
 import { WorkingMemory, WorkingMemoryManager } from './types';
 import { GameContext } from '../../shared/game/types';
-import { logger, prettyPrintLog } from '../../shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from '../../shared/logger';
 import { config } from '../config';
 
 export class WorkingMemoryManagerImpl implements WorkingMemoryManager {
@@ -50,7 +50,7 @@ export class WorkingMemoryManagerImpl implements WorkingMemoryManager {
 
             logger.debug('Updated working memory:\n' + prettyPrintLog(JSON.stringify(this.memory)));
         } catch (error) {
-            logger.error('Error updating working memory:\n' + prettyPrintLog(JSON.stringify(error)));
+            logger.error('Error updating working memory:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -80,7 +80,7 @@ export class WorkingMemoryManagerImpl implements WorkingMemoryManager {
         if (this.memory.reasoningHistory.length > this.maxReasoningHistory) {
             this.memory.reasoningHistory.shift();
         }
-        logger.debug('Added reasoning to history:', reasoning);
+        logger.debug('Added reasoning to history:' + formatGenericOutput(reasoning));
     }
 
     getRecentReasoning(limit: number = config.memory.maxResults): string[] {

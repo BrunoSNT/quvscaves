@@ -32,7 +32,7 @@ export async function handleListCharacters(interaction: ChatInputCommandInteract
         await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         logger.info(`Listed characters for user ${interaction.user.id}`);
     } catch (error) {
-        logger.error('Error in list characters command:', error);
+        logger.error('Error in list characters command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

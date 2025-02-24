@@ -3,6 +3,7 @@ import { VectorEntry, VectorSearchResult } from '../memory/types';
 import { logger } from '../../shared/logger';
 import { config } from '../config';
 import axios from 'axios';
+import { formatGenericOutput } from '../../shared/logger';
 
 export class VectorStore {
     private client: ChromaClient;
@@ -33,7 +34,7 @@ export class VectorStore {
                 });
                 logger.info(`Successfully initialized ChromaDB collection: ${collectionName}`);
             } catch (error) {
-                logger.error('Error initializing ChromaDB collection:', error);
+                logger.error('Error initializing ChromaDB collection:' + formatGenericOutput(JSON.stringify(error)));
                 throw error;
             }
         }
@@ -54,7 +55,7 @@ export class VectorStore {
             });
             logger.info(`Successfully added entry ${entry.id} to vector store`);
         } catch (error) {
-            logger.error(`Error adding entry ${entry.id} to vector store:`, error);
+            logger.error(`Error adding entry ${entry.id} to vector store:` + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -78,7 +79,7 @@ export class VectorStore {
                 metadata: results.metadatas?.[0]?.[index] || {}
             }));
         } catch (error) {
-            logger.error('Error searching vector store:', error);
+            logger.error('Error searching vector store:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }
@@ -105,7 +106,7 @@ export class VectorStore {
 
             return embedding;
         } catch (error) {
-            logger.error('Error getting embedding:', error);
+            logger.error('Error getting embedding:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

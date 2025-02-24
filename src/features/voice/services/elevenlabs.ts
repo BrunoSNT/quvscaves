@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { VoiceService, VoiceConfig } from '../types';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 
 export class ElevenLabsService implements VoiceService {
     private readonly API_URL = 'https://api.elevenlabs.io/v1';
@@ -12,7 +12,7 @@ export class ElevenLabsService implements VoiceService {
             }
 
             const response = await axios.post(
-                `${this.API_URL}/text-to-speech/${config.voiceId || 'pNInz6obpgDQGcFmaJgB'}`,
+                `${this.API_URL}/text-to-speech/pNInz6obpgDQGcFmaJgB`,
                 {
                     text,
                     model_id: 'eleven_multilingual_v2',
@@ -35,7 +35,7 @@ export class ElevenLabsService implements VoiceService {
 
             return Buffer.from(response.data);
         } catch (error) {
-            logger.error('Error in ElevenLabs TTS:', error);
+            logger.error('Error in ElevenLabs TTS:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

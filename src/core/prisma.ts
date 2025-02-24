@@ -1,5 +1,5 @@
 import { PrismaClient, Prisma } from '../../prisma/client';
-import { logger, prettyPrintLog } from '../shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from '../shared/logger';
 
 interface QueryEvent {
     timestamp: Date;
@@ -40,8 +40,5 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 (prisma as any).$on('error', (e: Error) => {
-    logger.error('Database error: ' + {
-        message: e.message,
-        stack: e.stack
-    });
+    logger.error('Database error: ' + formatGenericOutput(JSON.stringify(e)));
 }); 

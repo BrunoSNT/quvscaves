@@ -28,7 +28,7 @@ export async function handleRegister(interaction: ChatInputCommandInteraction) {
 
         logger.info(`User registered: ${user.id}`);
     } catch (error) {
-        logger.error('Error in register command:', error);
+        logger.error('Error in register command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

@@ -1,5 +1,5 @@
 import { VoiceService, VoiceConfig } from '../types';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 import axios from 'axios';
 
 export class KokoroService implements VoiceService {
@@ -37,7 +37,7 @@ export class KokoroService implements VoiceService {
             logger.info('Successfully received audio data from Kokoro TTS server');
             return Buffer.from(response.data);
         } catch (error) {
-            logger.error('Error in Kokoro TTS:', error);
+            logger.error('Error in Kokoro TTS:' + formatGenericOutput(JSON.stringify(error)));
             return Buffer.from([]); // Return empty buffer on error to avoid breaking the flow
         }
     }

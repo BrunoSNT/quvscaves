@@ -1,7 +1,7 @@
 import { ChatInputCommandInteraction, MessageFlags } from 'discord.js';
 import { DefaultSocialService } from '../services/social';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
 
 const socialService = new DefaultSocialService();
@@ -29,7 +29,7 @@ export async function handleAcceptFriend(interaction: ChatInputCommandInteractio
 
         logger.info(`Friend request ${requestId} accepted by ${interaction.user.id}`);
     } catch (error) {
-        logger.error('Error in accept friend command:', error);
+        logger.error('Error in accept friend command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

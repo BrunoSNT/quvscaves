@@ -1,6 +1,6 @@
 import { GameContext } from './types';
 import { GameReward } from './types';
-import { logger } from '../logger';
+import { formatGenericOutput, logger } from '../logger';
 
 export interface ContextUpdate {
     type: 'SKILL_CHECK' | 'REWARD' | 'LOOT' | 'COMBAT' | 'NARRATIVE';
@@ -44,7 +44,7 @@ export class ContextManager {
 
     public addReward(reward: GameReward): void {
         if (!this.validateReward(reward)) {
-            logger.warn('Invalid reward skipped:', reward);
+            logger.warn('Invalid reward skipped:' + formatGenericOutput(JSON.stringify(reward)));
             return;
         }
 
@@ -128,7 +128,7 @@ export class ContextManager {
                     return reward.message || null;
             }
         } catch (error) {
-            logger.error('Error formatting reward message:', error);
+            logger.error('Error formatting reward message:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }

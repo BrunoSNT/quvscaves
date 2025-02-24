@@ -31,7 +31,7 @@ export async function handleJoinAdventure(interaction: ChatInputCommandInteracti
 
         logger.info(`User ${interaction.user.id} joined adventure ${adventureId}`);
     } catch (error) {
-        logger.error('Error in join adventure command:', error);
+        logger.error('Error in join adventure command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

@@ -1,6 +1,6 @@
 import { EpisodicMemory, SemanticMemory, WorkingMemory } from './types';
 import { VectorStore } from '../vector/store';
-import { logger } from '../../shared/logger';
+import { logger, formatGenericOutput } from '../../shared/logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -25,7 +25,7 @@ export async function exportMemoriesToJsonl(adventureId: string, memories: Episo
         logger.info(`Exported ${memories.length} memories to ${filepath}`);
         return filepath;
     } catch (error) {
-        logger.error('Error exporting memories:', error);
+        logger.error('Error exporting memories:' + formatGenericOutput(JSON.stringify(error)));
         throw error;
     }
 }
@@ -63,7 +63,7 @@ export async function findSimilarMemories(
             })
             .slice(0, limit);
     } catch (error) {
-        logger.error('Error finding similar memories:', error);
+        logger.error('Error finding similar memories:' + formatGenericOutput(JSON.stringify(error)));
         throw error;
     }
 }

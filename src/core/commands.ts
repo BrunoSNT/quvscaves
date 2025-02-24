@@ -1,5 +1,5 @@
 import { Client, REST, Routes } from 'discord.js';
-import { logger } from '../shared/logger';
+import { logger, formatGenericOutput } from '../shared/logger';
 import { adventureCommands } from '../features/adventure/commands';
 import { characterCommands } from '../features/character/commands';
 import { socialCommands } from '../features/social/commands';
@@ -25,6 +25,6 @@ export const registerCommands = async (client: Client) => {
         );
         logger.info('Successfully registered application commands.');
     } catch (error) {
-        logger.error('Error registering commands:', error);
+        logger.error('Error registering commands:' + formatGenericOutput(JSON.stringify(error)));
     }
 }; 

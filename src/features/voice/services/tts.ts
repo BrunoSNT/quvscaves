@@ -1,5 +1,5 @@
 import { VoiceConfig } from '../types';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 import { config } from '../../../core/config';
 import axios from 'axios';
 
@@ -17,7 +17,7 @@ export class TTSService {
                     throw new Error('Unsupported TTS provider');
             }
         } catch (error) {
-            logger.error('Error generating speech:', error);
+            logger.error('Error generating speech:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

@@ -3,6 +3,7 @@ import { DefaultSocialService } from '../services/social';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
+import { formatGenericOutput } from '../../../shared/logger';
 
 const socialService = new DefaultSocialService();
 
@@ -22,7 +23,7 @@ export async function handleRemoveFriend(interaction: ChatInputCommandInteractio
 
         logger.info(`Friend removed: ${interaction.user.id} removed ${targetUser.id}`);
     } catch (error) {
-        logger.error('Error in remove friend command:', error);
+        logger.error('Error in remove friend command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral

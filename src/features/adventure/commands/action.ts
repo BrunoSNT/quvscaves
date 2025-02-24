@@ -1,6 +1,6 @@
 import { ChatInputCommandInteraction, ButtonStyle, MessageFlags, VoiceChannel, ChannelType, BaseGuildVoiceChannel, GuildVoiceChannelResolvable, MessageComponentInteraction } from 'discord.js';
 import { AdventureService } from '../services/adventure';
-import { logger, prettyPrintLog } from '../../../shared/logger';
+import { logger, prettyPrintLog, formatGenericOutput } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
 import { GameMaster } from '../../../ai/gamemaster';
 import { prisma } from '../../../core/prisma';
@@ -25,6 +25,204 @@ import { formatCharacterSheet } from '../../../shared/discord/sheet';
 
 const adventureService = new AdventureService();
 const activeConnections = new Map<string, VoiceConnection>();
+
+const voiceConnectionPool = new Map<string, {
+    connection: VoiceConnection;
+    lastUsed: number;
+    disconnectTimeout?: NodeJS.Timeout;
+}>();
+
+function cleanupOldConnections() {
+    const now = Date.now();
+    for (const [guildId, data] of voiceConnectionPool.entries()) {
+        if (now - data.lastUsed > 5 * 60 * 1000) { // 5 minutes
+            if (data.disconnectTimeout) {
+                clearTimeout(data.disconnectTimeout);
+            }
+            data.connection.destroy();
+            voiceConnectionPool.delete(guildId);
+        }
+    }
+}
+
+setInterval(cleanupOldConnections, 60 * 1000);
+
+async function getOrCreateVoiceConnection(channel: VoiceChannel): Promise<VoiceConnection> {
+    const guildId = channel.guild.id;
+    const existingData = voiceConnectionPool.get(guildId);
+
+    if (existingData) {
+        // Clear any pending disconnect
+        if (existingData.disconnectTimeout) {
+            clearTimeout(existingData.disconnectTimeout);
+            existingData.disconnectTimeout = undefined;
+        }
+        existingData.lastUsed = Date.now();
+        
+        // Check if connection is still valid
+        if (existingData.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            return existingData.connection;
+        }
+        voiceConnectionPool.delete(guildId);
+    }
+
+    // Create new connection
+    const connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: channel.guild.id,
+        adapterCreator: channel.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false
+    });
+
+    // Wait for connection to be ready
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+
+    // Store in pool
+    voiceConnectionPool.set(guildId, {
+        connection,
+        lastUsed: Date.now()
+    });
+
+    return connection;
+}
+
+async function playAudio(connection: VoiceConnection, audioBuffer: Buffer): Promise<void> {
+    return new Promise((resolve, reject) => {
+        try {
+            const player = createAudioPlayer();
+            const stream = Readable.from(audioBuffer);
+            const resource = createAudioResource(stream, {
+                inputType: StreamType.Arbitrary,
+                inlineVolume: true
+            });
+
+            if (resource.volume) {
+                resource.volume.setVolume(1.0);
+            }
+
+            player.once(AudioPlayerStatus.Playing, () => {
+                logger.info('Started playing audio');
+            });
+
+            player.once(AudioPlayerStatus.Idle, () => {
+                logger.info('Finished playing audio');
+                resolve();
+            });
+
+            player.once('error', (error) => {
+                logger.error('Error playing audio:' + formatGenericOutput(JSON.stringify(error)));
+                reject(error);
+            });
+
+            connection.subscribe(player);
+            player.play(resource);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+async function playNarration(channel: VoiceChannel, texts: string[], config: VoiceConfig): Promise<{ startedPlaying: Promise<void>; finished: Promise<void> }> {
+    let startedPlayingResolve!: (value: void | PromiseLike<void>) => void;
+    let finishedResolve!: (value: void | PromiseLike<void>) => void;
+    let startedPlayingReject!: (reason: any) => void;
+    let finishedReject!: (reason: any) => void;
+
+    const startedPlaying = new Promise<void>((resolve, reject) => {
+        startedPlayingResolve = resolve;
+        startedPlayingReject = reject;
+    });
+
+    const finished = new Promise<void>((resolve, reject) => {
+        finishedResolve = resolve;
+        finishedReject = reject;
+    });
+
+    try {
+        if (texts.length === 0) {
+            startedPlayingResolve();
+            finishedResolve();
+            return { startedPlaying, finished };
+        }
+
+        const connection = await getOrCreateVoiceConnection(channel);
+        const voiceService = await getVoiceService(config.provider);
+
+        let hasStartedPlaying = false;
+
+        // Create a map to store audio buffers with their processing promises
+        const audioBuffers = new Map<number, Promise<Buffer>>();
+        let currentIndex = 0;
+
+        // Start processing all chunks immediately in parallel
+        logger.info('Starting parallel audio generation for all chunks');
+        texts.forEach((text, index) => {
+            const processPromise = voiceService.speak(text, config)
+                .then(buffer => {
+                    if (buffer && buffer.length > 0) {
+                        logger.info(`Generated audio for chunk ${index + 1}/${texts.length} (${buffer.length} bytes)`);
+                        return buffer;
+                    }
+                    throw new Error(`Failed to generate audio for chunk ${index + 1}`);
+                })
+                .catch(error => {
+                    logger.error(`Error generating audio for chunk ${index + 1}:` + formatGenericOutput(JSON.stringify(error)));
+                    throw error;
+                });
+
+            audioBuffers.set(index, processPromise);
+        });
+
+        // Play audio chunks sequentially, but they're all being processed in parallel
+        while (currentIndex < texts.length) {
+            try {
+                // Get the promise for the current chunk
+                const bufferPromise = audioBuffers.get(currentIndex);
+                if (!bufferPromise) {
+                    logger.error(`No buffer promise found for index ${currentIndex}`);
+                    currentIndex++;
+                    continue;
+                }
+
+                // Wait for the current chunk to be ready
+                const buffer = await bufferPromise;
+                
+                // Play the chunk
+                await playAudio(connection, buffer);
+
+                if (!hasStartedPlaying) {
+                    hasStartedPlaying = true;
+                    startedPlayingResolve();
+                }
+
+                currentIndex++;
+            } catch (error) {
+                logger.error(`Error playing audio chunk ${currentIndex}:` + formatGenericOutput(JSON.stringify(error)));
+                currentIndex++; // Skip errored chunk
+            }
+        }
+
+        // Schedule connection cleanup
+        const poolData = voiceConnectionPool.get(channel.guild.id);
+        if (poolData) {
+            poolData.disconnectTimeout = setTimeout(() => {
+                if (poolData.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+                    poolData.connection.destroy();
+                }
+                voiceConnectionPool.delete(channel.guild.id);
+            }, 5 * 60 * 1000); // 5 minutes
+        }
+
+        finishedResolve();
+    } catch (error) {
+        startedPlayingReject(error);
+        finishedReject(error);
+        throw error;
+    }
+
+    return { startedPlaying, finished };
+}
 
 export const ACTION_CONCEPTS = {
     "en-US": {
@@ -212,35 +410,44 @@ const EMOJI_MAP: Record<string, string> = {
     "default": "➡️",
 };
 
-function splitIntoSentences(text: string): string[] {
-    // First split into paragraphs
+function splitIntoChunks(text: string): string[] {
+    // Only split if text is longer than 500 characters
+    if (text.length <= 500) {
+        return [text];
+    }
+
+    // Split into paragraphs first
     const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim().length > 0);
-    
-    const sentences: string[] = [];
+    const chunks: string[] = [];
+
     for (const paragraph of paragraphs) {
-        // Split on sentence boundaries while preserving punctuation
-        const sentencesInParagraph = paragraph
-            .split(/(?<=[.!?])\s+/)
-            .map(s => s.trim())
-            .filter(s => s.length > 0);
-            
-        // If a sentence is too long, split it into smaller chunks
-        for (const sentence of sentencesInParagraph) {
-            if (sentence.length > 500) {
-                // Split long sentences at commas or other natural breaks
-                const chunks = sentence
-                    .split(/(?<=[,;:])\s+/)
-                    .map(chunk => chunk.trim())
-                    .filter(chunk => chunk.length > 0);
-                    
-                sentences.push(...chunks);
+        // If paragraph is short enough, keep it as is
+        if (paragraph.length <= 500) {
+            chunks.push(paragraph);
+            continue;
+        }
+
+        // Split long paragraphs at sentence boundaries
+        const sentences = paragraph.split(/(?<=[.!?])\s+/);
+        let currentChunk = '';
+
+        for (const sentence of sentences) {
+            if (currentChunk.length + sentence.length > 500) {
+                if (currentChunk) {
+                    chunks.push(currentChunk.trim());
+                }
+                currentChunk = sentence;
             } else {
-                sentences.push(sentence);
+                currentChunk = currentChunk ? `${currentChunk} ${sentence}` : sentence;
             }
         }
+
+        if (currentChunk) {
+            chunks.push(currentChunk.trim());
+        }
     }
-    
-    return sentences;
+
+    return chunks;
 }
 
 class PromiseHandler {
@@ -274,91 +481,6 @@ class PromiseHandler {
     reject(error: any) {
         if (this.rejectStarted) this.rejectStarted(error);
         if (this.rejectFinished) this.rejectFinished(error);
-    }
-}
-
-// @ts-ignore - Discord.js types issue with VoiceChannel
-async function playNarration(channel: GuildVoiceChannelResolvable, texts: string[], config: VoiceConfig): Promise<{ startedPlaying: Promise<void>, finished: Promise<void> }> {
-    try {
-        const voiceService = await getVoiceService(config.provider);
-        const connection: VoiceConnection = joinVoiceChannel({
-            channelId: (channel as VoiceChannel).id,
-            guildId: (channel as VoiceChannel).guild.id,
-            adapterCreator: (channel as VoiceChannel).guild.voiceAdapterCreator,
-            selfDeaf: false,
-            selfMute: false
-        });
-
-        // Wait for connection to be ready
-        await new Promise((resolve) => {
-            connection.on(VoiceConnectionStatus.Ready, resolve);
-            setTimeout(resolve, 5000); // Timeout after 5 seconds
-        });
-
-        const player = createAudioPlayer();
-        connection.subscribe(player);
-
-        // Combine texts into complete paragraphs
-        const narrationText = texts[0] || '';
-        const atmosphereText = texts[1] || '';
-
-        let hasStartedPlaying = false;
-        const promiseHandler = new PromiseHandler();
-
-        try {
-            // Generate audio for both texts in parallel
-            const [narrationBuffer, atmosphereBuffer] = await Promise.all([
-                narrationText ? voiceService.speak(narrationText, config) : null,
-                atmosphereText ? voiceService.speak(atmosphereText, config) : null
-            ]);
-
-            // Play narration
-            if (narrationBuffer) {
-                const stream = Readable.from(narrationBuffer);
-                const resource = createAudioResource(stream);
-                player.play(resource);
-
-                if (!hasStartedPlaying) {
-                    hasStartedPlaying = true;
-                    promiseHandler.resolveStart();
-                }
-
-                // Wait for narration to finish
-                await new Promise<void>((resolve) => {
-                    player.once(AudioPlayerStatus.Idle, resolve);
-                });
-            }
-
-            // Play atmosphere
-            if (atmosphereBuffer) {
-                const stream = Readable.from(atmosphereBuffer);
-                const resource = createAudioResource(stream);
-                player.play(resource);
-
-                // Wait for atmosphere to finish
-                await new Promise<void>((resolve) => {
-                    player.once(AudioPlayerStatus.Idle, resolve);
-                });
-            }
-
-            // All audio has finished playing
-            promiseHandler.resolveFinish();
-            connection.destroy();
-
-        } catch (error) {
-            logger.error('Error during audio playback:', error);
-            promiseHandler.reject(error);
-            connection.destroy();
-            throw error;
-        }
-
-        return {
-            startedPlaying: promiseHandler.startedPlaying,
-            finished: promiseHandler.finished
-        };
-    } catch (error) {
-        logger.error('Error in playNarration:', error);
-        throw error;
     }
 }
 
@@ -399,7 +521,7 @@ async function getAbilityForSkill(skill: string, language: string = 'en-US'): Pr
 
         return bestAbility;
     } catch (error) {
-        logger.error('Error getting ability for skill:', error);
+        logger.error('Error getting ability for skill:' + formatGenericOutput(JSON.stringify(error)));
         return "wisdom"; // Default to wisdom on error
     }
 }
@@ -454,7 +576,7 @@ async function handleRollAction(interaction: any, character?: any, language: str
             });
 
             if (!adventure) {
-                logger.error('No active adventure found for user:', interaction.user.id);
+                logger.error('No active adventure found for user:' + formatGenericOutput(JSON.stringify(interaction.user.id)));
                 await interaction.editReply({
                     content: language === 'en-US'
                         ? 'Error: No active adventure found'
@@ -467,10 +589,10 @@ async function handleRollAction(interaction: any, character?: any, language: str
             // Find the player's character in this adventure
             const player = adventure.players.find(p => p.user.discordId === interaction.user.id);
             if (!player || !player.character) {
-                logger.error('No character found for user in adventure: ' + {
+                logger.error('No character found for user in adventure: ' + formatGenericOutput(JSON.stringify({
                     userId: interaction.user.id,
                     adventureId: adventure.id
-                });
+                })));
                 await interaction.editReply({
                     content: language === 'en-US'
                         ? 'Error: Character not found in this adventure'
@@ -486,7 +608,7 @@ async function handleRollAction(interaction: any, character?: any, language: str
 
         // Verify character has required stats
         if (!character.stats) {
-            logger.error('Character missing stats:', character.id);
+            logger.error('Character missing stats:' + formatGenericOutput(JSON.stringify(character.id)));
             await interaction.editReply({
                 content: language === 'en-US'
                     ? 'Error: Character stats not found'
@@ -575,13 +697,13 @@ async function handleRollAction(interaction: any, character?: any, language: str
                 components: []
             });
         } catch (replyError) {
-            logger.error('Error sending roll result:', replyError);
+            logger.error('Error sending roll result:' + formatGenericOutput(JSON.stringify(replyError)));
             // Don't throw here - we still want to return the result
         }
 
         return result;
     } catch (error) {
-        logger.error('Error in handleRollAction:', error);
+        logger.error('Error in handleRollAction:' + formatGenericOutput(JSON.stringify(error)));
         return null;
     }
 }
@@ -675,7 +797,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                         skillCheckResult.criticalFailure
                     );
                 } catch (error) {
-                    logger.error('Error waiting for roll interaction:', error);
+                    logger.error('Error waiting for roll interaction:' + formatGenericOutput(JSON.stringify(error)));
                     await rollMessage.edit({
                         content: context.language === 'en-US'
                             ? '❌ Roll timed out after 10 minutes. Please try your action again.'
@@ -907,7 +1029,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                                             });
                                         });
                                     } catch (error) {
-                                        logger.error('Failed to establish voice connection:', error);
+                                        logger.error('Failed to establish voice connection:' + formatGenericOutput(JSON.stringify(error)));
                                         activeConnections.delete(voiceChannel.guild.id);
                                         throw error;
                                     }
@@ -987,7 +1109,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                             }
                         }
                     } catch (voiceError) {
-                        logger.error('Error in voice setup:', voiceError);
+                        logger.error('Error in voice setup:' + formatGenericOutput(JSON.stringify(voiceError)));
                     }
                 }
 
@@ -1018,7 +1140,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                             components: components
                         });
                     } catch (buttonError) {
-                        logger.error('Error adding action buttons:', buttonError);
+                        logger.error('Error adding action buttons:' + formatGenericOutput(JSON.stringify(buttonError)));
                     }
                 }
 
@@ -1031,7 +1153,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
 
                 logger.info(`Action processed successfully for adventure ${context.adventure?.id}`);
             } catch (displayError) {
-                logger.error('Error displaying response:', displayError);
+                logger.error('Error displaying response:' + formatGenericOutput(JSON.stringify(displayError)));
                 throw displayError;
             }
 
@@ -1076,11 +1198,11 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                 }
             }
         } catch (parseError) {
-            logger.error('Error parsing AI response:', parseError);
+            logger.error('Error parsing AI response:' + formatGenericOutput(JSON.stringify(parseError)));
             throw parseError;
         }
     } catch (error) {
-        logger.error('Error handling action response:', error);
+        logger.error('Error handling action response:' + formatGenericOutput(JSON.stringify(error)));
         try {
             if (interaction.deferred) {
                 await interaction.editReply({ 
@@ -1091,7 +1213,7 @@ async function handleActionResponse(interaction: ChatInputCommandInteraction | a
                 });
             }
         } catch (replyError) {
-            logger.error('Error sending error message:', replyError);
+            logger.error('Error sending error message:' + formatGenericOutput(JSON.stringify(replyError)));
         }
         throw error;
     }
@@ -1284,7 +1406,7 @@ async function getEmojiForAction(action: string, language: string = 'en-US'): Pr
             ? languageConcepts[bestCategory as keyof typeof languageConcepts].emoji 
             : "➡️";
     } catch (error) {
-        logger.error('Error getting emoji for action:', error);
+        logger.error('Error getting emoji for action:' + formatGenericOutput(JSON.stringify(error)));
         return "➡️";
     }
 }
@@ -1341,6 +1463,6 @@ function safeDestroyConnection(connection: VoiceConnection, guildId: string) {
         }
         activeConnections.delete(guildId);
     } catch (error) {
-        logger.error('Error safely destroying connection:', error);
+        logger.error('Error safely destroying connection:' + formatGenericOutput(JSON.stringify(error)));
     }
 } 

@@ -20,7 +20,7 @@ export class LanguageService {
 
             return formatLanguageCode(user.language);
         } catch (error) {
-            logger.error('Error getting user language:', error);
+            logger.error('Error getting user language:' + formatGenericOutput(JSON.stringify(error)));
             return getDefaultLanguage();
         }
     }
@@ -40,7 +40,7 @@ export class LanguageService {
 
             logger.info(`Updated language for user ${userId} to ${formattedLanguage}`);
         } catch (error) {
-            logger.error('Error setting user language:', error);
+            logger.error('Error setting user language:' + formatGenericOutput(JSON.stringify(error)));
             throw error;
         }
     }

@@ -194,7 +194,7 @@ function formatGameOutput(jsonStr: string): string {
     }
 }
 
-function formatGenericOutput(jsonStr: string): string {
+export function formatGenericOutput(jsonStr: string): string {
     try {
         const output = JSON.parse(jsonStr);
         return Object.entries(output)

@@ -68,7 +68,7 @@ export async function handleDeleteAdventure(interaction: ChatInputCommandInterac
 
         logger.info(`Adventure ${adventureId} deleted by user ${user.id}`);
     } catch (error) {
-        logger.error('Error in delete adventure command:', error);
+        logger.error('Error in delete adventure command:' + formatGenericOutput(JSON.stringify(error)));
         // If replying to the interaction fails, attempt a silent fallback DM.
         try {
             await interaction.reply({

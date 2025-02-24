@@ -3,6 +3,7 @@ import { DefaultWalletService } from '../services/wallet';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
+import { formatGenericOutput } from '../../../shared/logger';
 
 const walletService = new DefaultWalletService();
 
@@ -38,8 +39,8 @@ export async function handleWalletBalance(interaction: ChatInputCommandInteracti
         });
 
         logger.info(`Balance checked for user ${interaction.user.id}`);
-    } catch (error) {
-        logger.error('Error in wallet balance command:', error);
+    } catch (error: any) {
+        logger.error('Error in wallet balance command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: error.message || translate('errors.generic'),
             flags: MessageFlags.Ephemeral

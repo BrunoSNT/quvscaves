@@ -3,6 +3,7 @@ import { DefaultWalletService } from '../services/wallet';
 import { sendFormattedResponse } from '../../../shared/discord/embeds';
 import { logger } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
+import { formatGenericOutput } from '../../../shared/logger';
 
 const walletService = new DefaultWalletService();
 
@@ -24,7 +25,7 @@ export async function handleUnlinkWallet(interaction: ChatInputCommandInteractio
 
         logger.info(`Wallet unlinked for user ${interaction.user.id}`);
     } catch (error: any) {
-        logger.error('Error in unlink wallet command:', error);
+        logger.error('Error in unlink wallet command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: error.message || translate('errors.generic'),
             flags: MessageFlags.Ephemeral

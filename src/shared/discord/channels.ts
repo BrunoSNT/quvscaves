@@ -1,5 +1,5 @@
 import { Guild, CategoryChannel, TextChannel, VoiceChannel, ChannelType, ChatInputCommandInteraction, PermissionsBitField, EmbedBuilder, ActionRowBuilder, ButtonBuilder, MessageActionRowComponentBuilder, MessageFlags } from 'discord.js';
-import { logger } from '../../shared/logger';
+import { formatGenericOutput, logger } from '../../shared/logger';
 import { prisma } from '../../core/prisma';
 import type { Character } from '../../features/character/types';
 import { formatCharacterSheet } from './sheet';
@@ -233,7 +233,7 @@ export async function startAdventure(interaction: ChatInputCommandInteraction, a
                 await originalMessage.edit({ components: [] });
             }
         } catch (error) {
-            logger.error('Error in collector:', error);
+            logger.error('Error in collector:' + formatGenericOutput(JSON.stringify(error)));
             try {
                 if (i.deferred) {
                     await i.editReply({
@@ -250,7 +250,7 @@ export async function startAdventure(interaction: ChatInputCommandInteraction, a
                     });
                 }
             } catch (replyError) {
-                logger.error('Error sending error message:', replyError);
+                logger.error('Error sending error message:' + formatGenericOutput(JSON.stringify(replyError)));
             }
         }
     });

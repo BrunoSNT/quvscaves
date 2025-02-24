@@ -1,6 +1,6 @@
 import { VectorStore } from '../core/vector/store';
 import { QwenClient } from './qwen';
-import { logger } from '../shared/logger';
+import { logger, formatGenericOutput } from '../shared/logger';
 import { GameContext } from '../shared/game/types';
 
 export interface AnalysisResult<T> {
@@ -46,7 +46,7 @@ export abstract class HybridAnalyzer<T> {
             logger.info(`Using LLM for analysis (embedding confidence: ${confidence})`);
             return await this.llmAnalysis(action, context);
         } catch (error) {
-            logger.error('Error in hybrid analysis:', error);
+            logger.error('Error in hybrid analysis:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }
@@ -65,7 +65,7 @@ export abstract class HybridAnalyzer<T> {
             const result = await this.generateQuickResult(action, context, similarity);
             return { result, confidence: similarity };
         } catch (error) {
-            logger.error('Error in quick embedding check:', error);
+            logger.error('Error in quick embedding check:' + formatGenericOutput(JSON.stringify(error)));
             return { result: null, confidence: 0 };
         }
     }
@@ -80,7 +80,7 @@ export abstract class HybridAnalyzer<T> {
 
             return this.parseLLMResponse(response);
         } catch (error) {
-            logger.error('Error in LLM analysis:', error);
+            logger.error('Error in LLM analysis:' + formatGenericOutput(JSON.stringify(error)));
             return null;
         }
     }

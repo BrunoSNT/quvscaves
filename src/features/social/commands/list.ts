@@ -1,6 +1,6 @@
 import { ChatInputCommandInteraction, EmbedBuilder, MessageFlags } from 'discord.js';
 import { DefaultSocialService } from '../services/social';
-import { logger } from '../../../shared/logger';
+import { logger, formatGenericOutput } from '../../../shared/logger';
 import { translate } from '../../../shared/i18n/translations';
 
 const socialService = new DefaultSocialService();
@@ -58,7 +58,7 @@ export async function handleListFriends(interaction: ChatInputCommandInteraction
         await interaction.reply({ embeds, flags: MessageFlags.Ephemeral });
         logger.info(`Listed friends and requests for user ${interaction.user.id}`);
     } catch (error) {
-        logger.error('Error in list friends command:', error);
+        logger.error('Error in list friends command:' + formatGenericOutput(JSON.stringify(error)));
         await interaction.reply({
             content: translate('errors.generic'),
             flags: MessageFlags.Ephemeral
