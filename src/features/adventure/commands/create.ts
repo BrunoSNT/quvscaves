@@ -32,12 +32,13 @@ import { ActionType } from '../../../shared/game/types';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStats, GameSkills } from '../../../shared/game/types';
 import { VoiceConfig, VoiceProvider } from '../../../features/voice/types';
-import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnection, VoiceConnectionStatus } from '@discordjs/voice';
+import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnection, VoiceConnectionStatus, StreamType } from '@discordjs/voice';
 import { Readable } from 'stream';
 import { getVoiceService } from '../../../features/voice/services';
 import { VectorStore } from '../../../core/vector/store';
 import { ACTION_CONCEPTS } from './action';
 import { entersState } from '@discordjs/voice';
+import { getOrCreateVoiceConnection, safeDestroyConnection, voiceConnectionPool } from '../../../shared/voice/connection';
 
 const adventureService = new AdventureService();
 
@@ -1304,55 +1305,111 @@ async function createActionButtons(actions: Array<{ type: ActionType; text: stri
 
 // Update the playNarration function
 async function playNarration(channel: VoiceChannel, texts: string[], config: VoiceConfig): Promise<{ startedPlaying: Promise<void>; finished: Promise<void> }> {
+    let startedPlayingResolve!: (value: void | PromiseLike<void>) => void;
+    let finishedResolve!: (value: void | PromiseLike<void>) => void;
+    let startedPlayingReject!: (reason: any) => void;
+    let finishedReject!: (reason: any) => void;
+
+    const startedPlaying = new Promise<void>((resolve, reject) => {
+        startedPlayingResolve = resolve;
+        startedPlayingReject = reject;
+    });
+
+    const finished = new Promise<void>((resolve, reject) => {
+        finishedResolve = resolve;
+        finishedReject = reject;
+    });
+
     try {
-        logger.info('Starting voice narration...');
-        logger.info(`Received ${texts.length} texts to narrate`);
-
-        // Create promises early
-        let startedPlayingResolve!: (value: void | PromiseLike<void>) => void;
-        let finishedResolve!: (value: void | PromiseLike<void>) => void;
-        let startedPlayingReject!: (reason: any) => void;
-        let finishedReject!: (reason: any) => void;
-
-        const startedPlaying = new Promise<void>((resolve, reject) => {
-            startedPlayingResolve = resolve;
-            startedPlayingReject = reject;
-        });
-
-        const finished = new Promise<void>((resolve, reject) => {
-            finishedResolve = resolve;
-            finishedReject = reject;
-        });
-
-        // Validate texts
         if (texts.length === 0) {
-            logger.warn('No texts to narrate');
             startedPlayingResolve();
             finishedResolve();
             return { startedPlaying, finished };
         }
 
-        // Log the texts for debugging
-        texts.forEach((text, index) => {
-            logger.info(`Text ${index + 1}: ${text.substring(0, 100)}${text.length > 100 ? '...' : ''}`);
-        });
-        
-        logger.info('Attempting to join voice channel...');
-        const connection = joinVoiceChannel({
-            channelId: channel.id,
-            guildId: channel.guild.id,
-            adapterCreator: channel.guild.voiceAdapterCreator,
-            selfDeaf: false,
-            selfMute: false
+        const connection = await getOrCreateVoiceConnection(channel);
+        const voiceService = await getVoiceService(config.provider);
+
+        // Create audio player
+        const player = createAudioPlayer();
+        connection.subscribe(player);
+
+        // Track playback state
+        let hasStartedPlaying = false;
+        let currentIndex = 0;
+        let isPlaying = false;
+
+        // Process all texts in parallel and store promises
+        const audioPromises = texts.map((text, index) => 
+            voiceService.speak(text, config)
+                .then(buffer => {
+                    if (buffer && buffer.length > 0) {
+                        logger.info(`Generated audio for chunk ${index + 1}/${texts.length} (${buffer.length} bytes)`);
+                        return buffer;
+                    }
+                    throw new Error(`Failed to generate audio for chunk ${index + 1}`);
+                })
+                .catch(error => {
+                    logger.error('Error generating audio:' + formatGenericOutput(JSON.stringify(error)));
+                    return null;
+                })
+        );
+
+        // Function to play next audio chunk
+        const playNext = async () => {
+            if (currentIndex >= texts.length) {
+                if (!isPlaying) {
+                    finishedResolve();
+                }
+                return;
+            }
+
+            try {
+                const buffer = await audioPromises[currentIndex];
+                if (buffer) {
+                    isPlaying = true;
+                    const stream = Readable.from(buffer);
+                    const resource = createAudioResource(stream, {
+                        inputType: StreamType.Arbitrary,
+                        inlineVolume: true
+                    });
+
+                    if (resource.volume) {
+                        resource.volume.setVolume(1.0);
+                    }
+
+                    player.play(resource);
+
+                    if (!hasStartedPlaying) {
+                        hasStartedPlaying = true;
+                        startedPlayingResolve();
+                    }
+                }
+                currentIndex++;
+            } catch (error) {
+                logger.error('Error playing audio chunk:' + formatGenericOutput(JSON.stringify(error)));
+                currentIndex++;
+                playNext();
+            }
+        };
+
+        // Handle player state changes
+        player.on(AudioPlayerStatus.Idle, () => {
+            isPlaying = false;
+            playNext();
         });
 
-        // Add connection state logging
-        connection.on(VoiceConnectionStatus.Ready, () => {
-            logger.info('Voice connection is ready');
+        player.on('error', error => {
+            logger.error('Audio player error:' + formatGenericOutput(JSON.stringify(error)));
+            isPlaying = false;
+            playNext();
         });
 
+        // Start playing the first chunk
+        playNext();
+
+        // Handle connection state changes
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            logger.warn('Voice connection disconnected');
             try {
                 await Promise.race([
                     entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
@@ -1360,101 +1417,27 @@ async function playNarration(channel: VoiceChannel, texts: string[], config: Voi
                 ]);
             } catch (error) {
                 logger.error('Connection destroyed due to error:' + formatGenericOutput(JSON.stringify(error)));
-                startedPlayingReject(error);
-                finishedReject(error);
                 connection.destroy();
+                finishedReject(error);
             }
         });
 
-        connection.on('error', (error) => {
-            logger.error('Voice connection error:' + formatGenericOutput(JSON.stringify(error)));
-            startedPlayingReject(error);
-            finishedReject(error);
-        });
-
-        logger.info('Creating audio player...');
-        const player = createAudioPlayer();
-        
-        // Add player state logging
-        player.on('error', error => {
-            logger.error('Audio player error:' + formatGenericOutput(JSON.stringify(error)));
-            startedPlayingReject(error);
-            finishedReject(error);
-        });
-
-        let hasStartedPlaying = false;
-
-        // Resolve startedPlaying as soon as audio starts playing
-        player.on(AudioPlayerStatus.Playing, () => {
-            logger.info('Audio player started playing');
-            if (!hasStartedPlaying) {
-                logger.info('Resolving startedPlaying promise');
-                hasStartedPlaying = true;
-                startedPlayingResolve();
-            }
-        });
-
-        player.on(AudioPlayerStatus.Idle, () => {
-            logger.info('Audio player is idle');
-        });
-
-        logger.info('Subscribing connection to player...');
-        connection.subscribe(player);
-
-        // Get voice service
-        logger.info('Getting voice service...');
-        const voiceService = await getVoiceService(config.provider);
-        logger.info(`Using voice service: ${config.provider}`);
-
-        try {
-            // Play paragraphs sequentially as they're generated
-            for (let i = 0; i < texts.length; i++) {
-                const text = texts[i];
-                const paragraphNumber = i + 1;
-
-                logger.info(`Processing paragraph ${paragraphNumber}/${texts.length}`);
-                const buffer = await voiceService.speak(text, config);
-
-                if (!buffer || buffer.length === 0) {
-                    logger.warn(`Empty audio buffer for paragraph ${paragraphNumber}, skipping...`);
-                    continue;
+        // Schedule cleanup
+        const poolData = voiceConnectionPool.get(channel.guild.id);
+        if (poolData) {
+            poolData.disconnectTimeout = setTimeout(() => {
+                if (poolData.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+                    poolData.connection.destroy();
                 }
-
-                logger.info(`Playing paragraph ${paragraphNumber}/${texts.length} (${buffer.length} bytes)`);
-                const stream = Readable.from(buffer);
-                const resource = createAudioResource(stream);
-                player.play(resource);
-
-                // If this is the first paragraph, resolve startedPlaying
-                if (paragraphNumber === 1 && !hasStartedPlaying) {
-                    logger.info('First paragraph started playing, resolving startedPlaying');
-                    hasStartedPlaying = true;
-                    startedPlayingResolve();
-                }
-
-                // Wait for this paragraph to finish before playing the next one
-                await new Promise<void>((resolve) => {
-                    player.once(AudioPlayerStatus.Idle, () => {
-                        logger.info(`Paragraph ${paragraphNumber} finished playing`);
-                        resolve();
-                    });
-                });
-            }
-
-            // All audio has finished playing
-            logger.info(`All ${texts.length} paragraphs completed playback`);
-            finishedResolve();
-
-        } catch (error) {
-            logger.error('Error during audio playback:' + formatGenericOutput(JSON.stringify(error)));
-            startedPlayingReject(error);
-            finishedReject(error);
-            throw error;
+                voiceConnectionPool.delete(channel.guild.id);
+            }, 5 * 60 * 1000); // 5 minutes
         }
 
         return { startedPlaying, finished };
     } catch (error) {
         logger.error('Error in playNarration:' + formatGenericOutput(JSON.stringify(error)));
+        startedPlayingReject(error);
+        finishedReject(error);
         throw error;
     }
 } 
