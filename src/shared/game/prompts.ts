@@ -56,15 +56,32 @@ CORE PRINCIPLES:
 9. Your response MUST be always make the story narrative advance.
 10. DO NOT be repetivie.
 
+Each section MUST:
+- Contain relevant content
+- Do not include sections that do not apply or duplicate sections
+- Ensure each required section appears exactly once with no repetitive or extraneous content
+
 RESPONSE FORMAT RULES:
 Every response MUST include these sections in order:
-1. [Narration] - Vivid description of environment and results of player actions. 800 to 1200 characters.
-3. [Available Actions] - List of 3-5 possible actions the character can take based on their actual abilities with 80 characters MAX.
+1. [Narration] - Vivid description of environment and results of player actions
+3. [Available Actions] - List of 3-5 possible actions the character can take based on their actual abilities with 100 characters MAX.
 
 Optional sections if applicable:
 - [Atmosphere] - Current mood, weather, and environmental details
 - [Memory] - Key events or discoveries to remember
 - [Dialogues] - Dialogues of NPCs
+
+Response Format Example:
+{
+    "narration": <NARRATION min 400 characters, max 1000 characters>,
+    "atmosphere": <ATMOSPHERE min 100 characters, max 300 characters>,
+    "dialogues": <DIALOGUES min 100 characters, max 300 characters>,
+    "available_actions": [
+        <ACTION 1>,
+        <ACTION 2>,
+        <ACTION 3>
+    ]
+}
 `,
     contextLabels: {
       scene: 'Current Scene',
@@ -116,15 +133,28 @@ PRINCÍPIOS FUNDAMENTAIS:
 9. Sua resposta DEVE sempre fazer a história avançar.
 10. NÃO seja repetitivo.
 
+Cada seção DEVE:
+- Seguir a sequência acima
+- Não incluir seções que não se aplicam nem duplicar seções
+- Assegure-se de que cada seção obrigatória apareça exatamente uma vez, sem conteúdo repetitivo ou adicional.
+
 REGRAS DE FORMATO DE RESPOSTA:
 Toda resposta DEVEM seguir o formato destas seções em ordem:
-1. [Narração] - Descrição vívida do ambiente e resultados das ações do jogador. 800 a 1200 caracteres.
-3. [Ações Disponíveis] - Lista de 3-5 ações possíveis para o personagem com 80 caracteres MAXIMO.
+1. [Narração] - Descrição vívida do ambiente e resultados das ações do jogador
+3. [Ações Disponíveis] - Lista de 3-5 ações possíveis para o personagem com 100 caracteres MAXIMO.
 
 Seções opcionais quando aplicável:
 - [Memória] - Eventos chave ou descobertas para lembrar
 - [Atmosfera] - Humor atual, clima e detalhes do ambiente
 - [Dialogos] - Dialogos de NPCs
+
+Formato de resposta:
+{
+    "narration": <NARRATION min 400 characters, max 1000 characters>,
+    "atmosphere": <ATMOSPHERE min 100 characters, max 300 characters>,
+    "dialogues": <DIALOGUES min 100 characters, max 300 characters>,
+    "available_actions": [
+        <ACTION 1>,
 `,
     contextLabels: {
       scene: 'Cena Atual',
@@ -200,15 +230,10 @@ ${labels.tone}: ${context.adventure?.toneStyle}
 ${labels.magic}: ${context.adventure?.magicLevel}
 `;
 
-  // Add memory context with emphasis on recent scenes for continuity
+  // Add memory context
   const memoryContext = context.memory ? `
 Recent Events:
-${context.memory.recentScenes.map((scene, index) => 
-  `${index + 1}. ${scene.summary}`
-).join('\n')}
-
-Current Scene:
-${context.scene || ''}
+${context.memory.recentScenes.map(scene => scene.summary).join('\n')}
 
 Active Quests:
 ${context.memory.activeQuests.map(quest => `- ${quest.title}: ${quest.description}`).join('\n')}
@@ -234,56 +259,38 @@ ${context.combat.participants.map(p => {
     Status Effects: ${p.statusEffects.join(', ') || 'None'}`;
 }).join('\n')}` : '';
 
-  // Add character context
-  const characterContext = context.characters.map(char => {
-    const spells = char.spells?.map(s => `  - ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n') || 'None';
-    const abilities = char.abilities?.map(a => `  - ${a.name}`).join('\n') || 'None';
-    
-    return `- ${char.name} (${char.class})
+  return `
+${styleContext}
+
+${labels.scene}: ${context.scene}
+
+${labels.characters}:
+${context.characters.map(char => {
+  const spells = char.spells?.map(s => `  - ${s.name} (${s.level === 0 ? 'Cantrip' : `Level ${s.level}`})`).join('\n') || 'None';
+  const abilities = char.abilities?.map(a => `  - ${a.name}`).join('\n') || 'None';
+  
+  return `- ${char.name} (${char.class})
   Spells:
 ${spells}
   Abilities:
 ${abilities}`;
-  }).join('\n\n');
+}).join('\n\n')}
 
-  // Add current state context
-  const stateContext = `
 ${labels.status}:
 - ${labels.health}: ${context.currentState.health}
 - ${labels.mana}: ${context.currentState.mana}
 - ${labels.inventory}: ${context.currentState.inventory.join(', ') || labels.empty}
-- ${labels.questProgress}: ${context.currentState.questProgress}`;
-
-  // Add recent actions for continuity
-  const recentActions = context.playerActions.length > 0 
-    ? `\n\nRecent Actions:\n${context.playerActions.join('\n')}`
-    : '';
-
-  // Add additional context if any
-  const additionalContext = context.additionalContext?.length
-    ? `\n\nAdditional Context:\n${context.additionalContext.join('\n')}`
-    : '';
-
-  return `
-${styleContext}
-
-${characterContext}
-
-${stateContext}
+- ${labels.questProgress}: ${context.currentState.questProgress}
 
 ${memoryContext}
 
 ${combatContext}
 
-${recentActions}
-
-${additionalContext}
-
-Current Action: ${context.playerActions[0]}
+${labels.action}: ${context.playerActions[0]}
   `.trim();
 }
 
-export function createFallbackResponse(language: string): string {
+export function createFallbackResponse(language: SupportedLanguage): string {
   const isEnglish = language === 'en-US';
   
   logger.warn('Using fallback response for language:', language);

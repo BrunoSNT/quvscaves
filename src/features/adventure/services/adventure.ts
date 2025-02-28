@@ -257,6 +257,19 @@ export class AdventureService {
     }
 
     async joinAdventure(adventureId: string, userId: string, characterName: string): Promise<Adventure> {
+        // First check if the adventure exists
+        const adventure = await prisma.adventure.findUnique({
+            where: { id: adventureId },
+            include: {
+                players: true
+            }
+        });
+
+        if (!adventure) {
+            throw new Error('Adventure not found');
+        }
+
+        // Find the character
         const character = await prisma.character.findFirst({
             where: {
                 userId,
@@ -268,6 +281,13 @@ export class AdventureService {
             throw new Error('Character not found');
         }
 
+        // Check if the character is already in this adventure
+        const existingPlayer = adventure.players.find(p => p.characterId === character.id);
+        if (existingPlayer) {
+            throw new Error('Character is already in this adventure');
+        }
+
+        // Add the character to the adventure
         const updateAdventure = await prisma.adventure.update({
             where: { id: adventureId },
             data: {

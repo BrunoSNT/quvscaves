@@ -1,9 +1,18 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Events, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Events, SlashCommandBuilder, MessageFlags } = require('discord.js');
 const { createClient } = require('@supabase/supabase-js');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const QRCode = require('qrcode');
 const { REST, Routes } = require('discord.js');
+
+// Helper function for formatting error outputs
+function formatGenericOutput(jsonStr) {
+    try {
+        return JSON.stringify(JSON.parse(jsonStr), null, 2);
+    } catch (error) {
+        return jsonStr;
+    }
+}
 
 // Initialize Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
